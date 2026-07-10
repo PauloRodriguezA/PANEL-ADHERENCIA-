@@ -15,6 +15,7 @@ from io import BytesIO
 from pathlib import Path
 from urllib import error as urlerror
 from urllib import request as urlrequest
+from regiones_chile import corregir_region_por_ciudad, region_por_ciudad_o_comuna
 
 # =========================================================
 # CONFIG
@@ -96,7 +97,7 @@ SERVICIOS_CONFIG = {
         "disponibilidad": "",
         "reclamos": "",
         "pst": None,
-        "logo": LOGO_ECC_NEGRO,
+        "logo": LOGO_ECC,
         "epa_dir": "EPA-ECC",
         "epa_db": "epa_ecc.sqlite3",
         "epa_db_legacy": "epa_ecc.sqlite3",
@@ -279,7 +280,34 @@ DISPONIBILIDAD_SLA_MIN = 30
 RECLAMOS_META_CUMPLIMIENTO_PCT = 90
 RECLAMOS_META_RATIO_INCUMPLIMIENTO_PCT = 100 - RECLAMOS_META_CUMPLIMIENTO_PCT
 USO_HERRAMIENTA_META_PCT = 85
+USO_HERRAMIENTA_META_NOTA = round(1 + (USO_HERRAMIENTA_META_PCT / 100) * 6, 1)
+USO_HERRAMIENTA_NOTA_BUENA = round(1 + 0.80 * 6, 1)
+USO_HERRAMIENTA_NOTA_CRITICA = round(1 + 0.65 * 6, 1)
 DISPONIBILIDAD_TABLA_MAX_FILAS = 300
+
+
+def nota_uso_desde_pct(valor):
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError):
+        return pd.NA
+    if pd.isna(numero):
+        return pd.NA
+    if numero <= 7:
+        return round(max(1.0, min(7.0, numero)), 1)
+    return round(1 + (max(0.0, min(100.0, numero)) / 100.0) * 6.0, 1)
+
+
+def pct_desde_nota_uso(valor):
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError):
+        return 0.0
+    if pd.isna(numero):
+        return 0.0
+    if numero > 7:
+        return max(0.0, min(100.0, numero))
+    return round((max(1.0, min(7.0, numero)) - 1.0) / 6.0 * 100.0, 1)
 
 # =========================================================
 # CSS CORPORATIVO V3
@@ -4139,27 +4167,27 @@ div[data-testid="stAppViewContainer"] > .main{{
 }}
 
 .brand-lockup-ecc{{
-    height:54px !important;
-    align-items:flex-start !important;
+    height:50px !important;
+    align-items:center !important;
     justify-content:flex-end !important;
 }}
 
 .brand-lockup-ecc img{{
-    width:126px !important;
-    max-width:126px !important;
-    padding:7px 10px !important;
-    border-radius:0 !important;
+    width:118px !important;
+    max-width:118px !important;
+    padding:6px 9px !important;
+    border-radius:8px !important;
     background:
-        linear-gradient(115deg,rgba(0,0,0,.88),rgba(4,16,34,.70) 58%,rgba(46,203,242,.10)) !important;
+        linear-gradient(115deg,rgba(3,10,22,.58),rgba(4,16,34,.26) 62%,rgba(46,203,242,.08)) !important;
     mix-blend-mode:normal !important;
-    opacity:.96 !important;
+    opacity:.95 !important;
     box-shadow:
-        inset 0 1px 0 rgba(255,255,255,.13),
-        0 0 0 1px rgba(46,203,242,.18),
-        0 12px 22px rgba(0,0,0,.22) !important;
+        inset 0 1px 0 rgba(255,255,255,.10),
+        0 0 0 1px rgba(46,203,242,.10),
+        0 10px 18px rgba(0,0,0,.16) !important;
     filter:
-        drop-shadow(0 0 7px rgba(46,203,242,.20))
-        drop-shadow(0 9px 12px rgba(0,0,0,.18)) !important;
+        drop-shadow(0 0 6px rgba(46,203,242,.18))
+        drop-shadow(0 8px 10px rgba(0,0,0,.14)) !important;
 }}
 
 section[data-testid="stSidebar"] .filter-section-label{{
@@ -5421,6 +5449,7 @@ def cargar(ruta_archivo, version_archivo):
         return pd.DataFrame()
 
     df = pd.read_excel(ruta)
+    df = corregir_region_por_ciudad(df, "Ciudad", "Estado")
 
     if "Mes" in df.columns:
         df["Mes"] = pd.Categorical(
@@ -5669,19 +5698,8 @@ def clasificar_reclamo_operacional_panel(texto):
 
 
 def region_operacional_desde_texto(texto, region_actual=""):
-    actual = str(region_actual or "").strip()
-    actual_norm = normalizar_texto_operacional(actual)
-    if any(term in actual_norm for term in REGION_TARAPACA_TERMS):
-        return "Region de Tarapaca"
-    if any(term in actual_norm for term in REGION_ANTOFAGASTA_TERMS):
-        return "Region de Antofagasta"
-
-    limpio = normalizar_texto_operacional(texto)
-    if any(term in limpio for term in REGION_TARAPACA_TERMS):
-        return "Region de Tarapaca"
-    if any(term in limpio for term in REGION_ANTOFAGASTA_TERMS):
-        return "Region de Antofagasta"
-    return actual if actual else "Sin zona"
+    region = region_por_ciudad_o_comuna(texto, region_actual)
+    return region if region else "Sin zona"
 
 
 def cliente_desde_texto_panel(texto):
@@ -6582,6 +6600,12 @@ def cargar_uso_herramienta(ruta_archivo, version_archivo):
             df_uso[col] = ""
     for col in ["puntaje_total", "score_detalle", "score_equipos", "score_activo_fijo", "score_redaccion"]:
         df_uso[col] = pd.to_numeric(df_uso[col], errors="coerce")
+    if "puntaje_pct" in df_uso.columns:
+        df_uso["puntaje_pct"] = pd.to_numeric(df_uso["puntaje_pct"], errors="coerce")
+        df_uso["puntaje_pct"] = df_uso["puntaje_pct"].where(df_uso["puntaje_pct"].notna(), df_uso["puntaje_total"].map(pct_desde_nota_uso))
+    else:
+        df_uso["puntaje_pct"] = df_uso["puntaje_total"].map(pct_desde_nota_uso)
+    df_uso["puntaje_total"] = df_uso["puntaje_total"].map(nota_uso_desde_pct)
     df_uso["st"] = df_uso["st"].fillna("Sin clasificar").astype(str).str.strip().str.upper().replace({"": "Sin clasificar"})
     df_uso["servicio_tecnico"] = df_uso["st"]
     return df_uso
@@ -6603,7 +6627,7 @@ def preparar_export_uso_herramienta(df_uso_base):
     vista = df_uso_base.copy()
     columnas = [
         "servicio_tecnico", "folio_ot", "ticket", "cliente", "ciudad", "region_atendida",
-        "fecha_atencion", "hora_inicio", "hora_termino", "tecnico", "puntaje_total",
+        "fecha_atencion", "hora_inicio", "hora_termino", "tecnico", "puntaje_total", "puntaje_pct",
         "estado_calidad", "score_identificacion", "score_detalle", "score_equipos",
         "score_activo_fijo", "score_redaccion", "score_firmas", "requiere_retiro",
         "requiere_instalacion", "cliente_cge", "activo_fijo_detectado", "hallazgos",
@@ -6624,6 +6648,7 @@ def preparar_export_uso_herramienta(df_uso_base):
         "hora_termino": "Hora termino",
         "tecnico": "Tecnico",
         "puntaje_total": "Nota OT",
+        "puntaje_pct": "Puntaje equivalente %",
         "estado_calidad": "Clasificacion",
         "score_identificacion": "Score identificacion",
         "score_detalle": "Score detalle",
@@ -7381,8 +7406,6 @@ if not df_uso_f.empty:
 
     if tecnico and "tecnico" in df_uso_f.columns:
         df_uso_f = df_uso_f.loc[df_uso_f["tecnico"].astype(str).isin(set(map(str, tecnico)))]
-    elif pagina_uso_herramienta_activa:
-        df_uso_f = df_uso_f.iloc[0:0]
 
     fecha_uso = pd.to_datetime(df_uso_f.get("fecha_atencion"), dayfirst=True, errors="coerce")
     df_uso_f["_fecha_uso"] = fecha_uso
@@ -7403,6 +7426,13 @@ uso_pct_ok = round(uso_ok / max(uso_total, 1) * 100, 1) if uso_total else 0
 uso_retiros_incompletos = int(
     df_uso_f["hallazgos"].fillna("").astype(str).str.contains("Retiro sin declarar", case=False, na=False).sum()
 ) if uso_total and "hallazgos" in df_uso_f.columns else 0
+uso_detalle_incompleto = int(
+    df_uso_f["hallazgos"].fillna("").astype(str).str.contains(
+        "detalle de equipo|equipo intervenido|serie|maquina|máquina|marca/modelo|activo fijo",
+        case=False,
+        na=False,
+    ).sum()
+) if uso_total and "hallazgos" in df_uso_f.columns else 0
 uso_cge_sin_activo = int(
     (
         df_uso_f["cliente_cge"].fillna("").astype(str).str.upper().eq("SI")
@@ -7410,7 +7440,7 @@ uso_cge_sin_activo = int(
     ).sum()
 ) if uso_total and {"cliente_cge", "activo_fijo_detectado"}.issubset(df_uso_f.columns) else 0
 uso_tecnicos = int(df_uso_f["tecnico"].replace("", pd.NA).dropna().nunique()) if uso_total and "tecnico" in df_uso_f.columns else 0
-uso_brecha_meta = round(uso_promedio - USO_HERRAMIENTA_META_PCT, 1) if uso_total else 0
+uso_brecha_meta = round(uso_promedio - USO_HERRAMIENTA_META_NOTA, 1) if uso_total else 0
 df_uso_export = preparar_export_uso_herramienta(df_uso_f)
 
 
@@ -7500,7 +7530,7 @@ def resumen_comparativo_uso_herramienta_proveedor(df_uso_base):
     resumen["pct_ok"] = (resumen["ok"] / resumen["ots"].clip(lower=1) * 100).round(1)
     resumen = resumen.sort_values(["nota", "pct_ok"], ascending=[True, True])
     return "; ".join(
-        f"{row.servicio_tecnico}: nota {row.nota:.1f}, {row.pct_ok:.1f}% excelente/bueno en {int(row.ots)} OT"
+        f"{row.servicio_tecnico}: nota {row.nota:.1f}/7, {row.pct_ok:.1f}% excelente/bueno en {int(row.ots)} OT"
         for row in resumen.itertuples(index=False)
     )
 
@@ -8229,33 +8259,33 @@ def construir_insights_disponibilidad_fallback(metricas):
     comparativo = str(metricas.get("comparativo_disponibilidad_proveedor", "")).strip()
 
     if disp_total:
-        titulo_cumplimiento = "Bajo meta operacional" if disp_pct < DISPONIBILIDAD_META_PCT else "Dentro de meta"
+        titulo_cumplimiento = "Recomendación SLA"
         cuerpo_cumplimiento = (
             f"{disp_cumple}/{disp_total} solicitudes cumplen ({disp_pct:.1f}%). "
-            f"Brecha {disp_brecha_meta:+.1f} pp; foco inmediato en {disp_sin_respuesta} sin respuesta."
+            f"Acción: revisar los casos fuera de 30 min y cerrar primero las {disp_sin_respuesta} sin respuesta; brecha {disp_brecha_meta:+.1f} pp."
         )
         if comparativo:
-            cuerpo_cumplimiento = f"{cuerpo_cumplimiento} Comparativo: {comparativo}."
+            cuerpo_cumplimiento = f"{cuerpo_cumplimiento} Usar comparativo para exigir plan al ST más bajo: {comparativo}."
     else:
         titulo_cumplimiento = "Sin base filtrada"
-        cuerpo_cumplimiento = "No hay solicitudes disponibles para evaluar cumplimiento con los filtros actuales."
+        cuerpo_cumplimiento = "Recomendación: cambiar filtros o actualizar PST si esperabas solicitudes de disponibilidad."
 
     if disp_reit_cecom_total or disp_reiteraciones:
-        titulo_reiteraciones = "Reiteración con fricción"
+        titulo_reiteraciones = "Recomendación fricción"
         cuerpo_reiteraciones = (
             f"{disp_reit_cecom_total} reiteraciones CECOM y {disp_reiteraciones} totales en "
-            f"{disp_tickets_reiterados} tickets. Priorizar tickets con mas gestiones, proveedor bajo meta y sin respuesta {SERVICIO_TITULO}."
+            f"{disp_tickets_reiterados} tickets. Acción: ordenar por tickets más reiterados, asignar responsable y exigir respuesta documentada del ST."
         )
     else:
-        titulo_reiteraciones = "Sin fricción reiterada"
-        cuerpo_reiteraciones = "No se observan reiteraciones en la vista filtrada; mantener monitoreo preventivo."
+        titulo_reiteraciones = "Control preventivo"
+        cuerpo_reiteraciones = "Recomendación: mantener revisión diaria; si aparece una reiteración, tratarla como riesgo antes de que rompa SLA."
 
     if disp_sin_respuesta:
-        titulo_respuesta = "Pendiente de respuesta"
-        cuerpo_respuesta = f"{disp_sin_respuesta} solicitudes siguen sin respuesta. Ordenar por cliente y antiguedad para cierre operativo."
+        titulo_respuesta = "Recomendación cierre"
+        cuerpo_respuesta = f"{disp_sin_respuesta} solicitudes siguen sin respuesta. Acción: priorizar por antigüedad, cliente crítico y responsable antes de presentar cumplimiento."
     else:
-        titulo_respuesta = "Respuesta completa"
-        cuerpo_respuesta = "No quedan solicitudes sin respuesta en la vista filtrada; sostener control del SLA."
+        titulo_respuesta = "Sostener disciplina"
+        cuerpo_respuesta = "Recomendación: mantener el mismo ritual de control y auditar una muestra de respuestas para asegurar trazabilidad."
 
     return [
         {"indicador": "Cumplimiento KPI", "titulo": titulo_cumplimiento, "cuerpo": cuerpo_cumplimiento, "tono": "mal" if disp_pct < DISPONIBILIDAD_META_PCT else "bien"},
@@ -8384,31 +8414,31 @@ def construir_insights_reclamos_fallback(metricas):
     comparativo = str(metricas.get("comparativo_reclamos_proveedor", "")).strip()
 
     if reclamos_total:
-        titulo_volumen = "Riesgo contractual activo"
+        titulo_volumen = "Recomendación señales"
         cuerpo_volumen = (
             f"{reclamos_total} señales sobre {atenciones} atenciones: {reclamos_duros} reclamos y {reforzamientos} reforzamientos. "
-            f"Incumplimiento {ratio_incumplimiento:.1f}% y cumplimiento ajustado {cumplimiento_ajustado:.1f}% ({brecha_meta:+.1f} pp vs meta)."
+            f"Acción: separar reclamo real de reforzamiento, revisar evidencia y cerrar plan con responsable; incumplimiento {ratio_incumplimiento:.1f}%."
         )
     else:
         titulo_volumen = "Sin reclamos activos"
-        cuerpo_volumen = "No hay reclamos ni reforzamientos en la vista filtrada; sostener seguimiento preventivo."
+        cuerpo_volumen = "Recomendación: sostener seguimiento preventivo y actualizar PST si esperabas nuevos reclamos o reforzamientos."
 
     if reforzamientos:
-        titulo_foco_cliente = "Reforzamiento activo"
-        cuerpo_foco_cliente = f"{proveedor_ref_top} concentra {proveedor_ref_top_count} reforzamientos. Convertirlos en plan semanal: causa, responsable, fecha y evidencia de cierre."
+        titulo_foco_cliente = "Recomendación refuerzo"
+        cuerpo_foco_cliente = f"{proveedor_ref_top} concentra {proveedor_ref_top_count} reforzamientos. Acción: transformar cada correo en compromiso semanal con causa, dueño, fecha y evidencia."
     elif cliente_top_count:
-        titulo_foco_cliente = "Foco cliente activo"
-        cuerpo_foco_cliente = f"{cliente_top} tiene {cliente_top_count} señales; validar tickets distintos, fecha, tecnico y causa antes de accionar."
+        titulo_foco_cliente = "Recomendación cliente"
+        cuerpo_foco_cliente = f"{cliente_top} tiene {cliente_top_count} señales. Acción: validar tickets distintos, técnico, fecha y causa antes de levantar compromiso al ST."
     else:
         titulo_foco_cliente = "Sin foco operativo"
-        cuerpo_foco_cliente = "No aparece concentracion de reclamos ni reforzamientos con los filtros actuales."
+        cuerpo_foco_cliente = "Recomendación: no accionar correctivos masivos; mantener monitoreo y revisar cambios al actualizar PST."
 
-    titulo_motivo = "Causa y comparativo"
+    titulo_motivo = "Recomendación causa"
     if reclamos_total:
         base_motivo = f"{motivo_top}: {motivo_top_count} registros. Cliente a revisar: {cliente_top}. Clientes afectados: {reclamos_clientes}; tickets: {reclamos_tickets}."
-        cuerpo_motivo = f"{base_motivo} {comparativo}" if comparativo else f"{base_motivo} Comparar proveedor, causa y recurrencia antes de reclamar a contratista."
+        cuerpo_motivo = f"{base_motivo} Acción: priorizar la causa dominante y comparar ST antes de reclamar. {comparativo}" if comparativo else f"{base_motivo} Acción: comparar proveedor, causa y recurrencia antes de reclamar a contratista."
     else:
-        cuerpo_motivo = "Sin motivo dominante para analizar."
+        cuerpo_motivo = "Recomendación: sin motivo dominante; enfocar presentación en ausencia de señales y trazabilidad de control."
 
     return [
         {"indicador": "Volumen", "titulo": titulo_volumen, "cuerpo": cuerpo_volumen, "tono": "mal" if reclamos_total else "bien"},
@@ -8431,7 +8461,7 @@ def render_analisis_hoja(nombre_hoja, metricas, fallback):
         color = colores.get(insight.get("tono"), CELESTE)
         html_cards.append(
             f'<div class="ai-insight-card" style="--accent:{color};">'
-            f'<div class="ai-insight-kicker">{html.escape(str(insight.get("indicador", "")))}</div>'
+            f'<div class="ai-insight-kicker">Recomendación · {html.escape(str(insight.get("indicador", "")))}</div>'
             f'<div class="ai-insight-title">{html.escape(str(insight.get("titulo", "")))}</div>'
             f'<div class="ai-insight-body">{html.escape(str(insight.get("cuerpo", "")))}</div>'
             f'</div>'
@@ -8467,28 +8497,28 @@ def construir_insights_inicio_fallback(metricas):
     no_finalizadas_total = int(metricas.get("no_finalizadas", 0))
     comparativo = str(metricas.get("comparativo_inicio_proveedor", "")).strip()
 
-    titulo_cumplimiento = "Bajo meta de inicio" if pct_cumplimiento < 80 else "Inicio dentro de meta"
+    titulo_cumplimiento = "Recomendación inicio"
     cuerpo_cumplimiento = (
         f"{pct_cumplimiento:.1f}% de cumplimiento sobre {total_base} atenciones. "
-        + (f"Comparativo ST: {comparativo}." if comparativo else "Priorizar proveedor, técnico o base filtrada bajo 80%.")
+        + (f"Acción: tomar el ST bajo 80%, revisar atrasos por región y exigir plan por técnico. Comparativo: {comparativo}." if comparativo else "Acción: priorizar proveedor, técnico o región bajo 80% y revisar ventanas con atraso.")
         if total_base else
-        "No hay base filtrada para evaluar inicio de actividad."
+        "Recomendación: revisar filtros o actualizar WFM si esperabas atenciones."
     )
 
-    titulo_primera = "Buena resolución inicial" if pct_primera >= 70 else "Primera visita débil"
+    titulo_primera = "Recomendación primera visita"
     cuerpo_primera = (
         f"{finalizadas_primera} cierres en primera visita ({pct_primera:.1f}%). "
-        f"{no_finalizadas_total} atenciones siguen fuera de cierre final."
+        f"Acción: auditar las {no_finalizadas_total} no finalizadas, validar contacto, repuesto y motivo de no cierre."
         if total_base else
-        "Sin atenciones filtradas para evaluar cierre en primera visita."
+        "Recomendación: sin base filtrada, no tomar acción correctiva por técnico."
     )
 
-    titulo_revisitas = "Revisitas bajo control" if pct_revisitas_valor <= 5 else "Revisitas elevan fricción"
+    titulo_revisitas = "Recomendación revisitas"
     cuerpo_revisitas = (
         f"{revisitas_total} revisitas equivalen a {pct_revisitas_valor:.1f}% de la base. "
-        + ("Comparar recurrencia por ST antes de bajar a técnico." if comparativo else "Revisar causa raíz por técnico y base filtrada.")
+        + ("Acción: comparar recurrencia por ST antes de bajar a técnico." if comparativo else "Acción: revisar causa raíz por técnico, repuesto, contacto previo y cierre WFM.")
         if total_base else
-        "Sin base filtrada para detectar revisitas."
+        "Recomendación: sin base filtrada, esperar actualización WFM."
     )
 
     return [
@@ -8511,28 +8541,28 @@ def construir_insights_epa_fallback(metricas):
     recomendacion = float(metricas.get("epa_recomendacion", 0))
     tasa_respuesta = round(respondidas / max(total_atenciones, 1) * 100, 1) if total_atenciones else 0
 
-    titulo_satisfaccion = "Satisfacción sobre meta" if satisfaccion >= 90 else "Satisfacción bajo meta"
+    titulo_satisfaccion = "Recomendación satisfacción"
     cuerpo_satisfaccion = (
         f"{satisfaccion:.1f}% de satisfacción y promedio {promedio:.1f}/5. "
-        "Revisar comentarios de notas bajas."
+        "Acción: leer comentarios de notas bajo 4, clasificar causa y reforzar al técnico/ST con menor promedio."
         if respondidas else
-        "Aún no hay respuestas EPA suficientes para evaluar satisfacción."
+        "Recomendación: aún no hay respuestas suficientes; primero aumentar captura EPA."
     )
 
-    titulo_respuesta = "Buena captura EPA" if tasa_respuesta >= 70 else "Captura EPA insuficiente"
+    titulo_respuesta = "Recomendación captura"
     cuerpo_respuesta = (
         f"{respondidas}/{total_atenciones} respuestas ({tasa_respuesta:.1f}%). "
-        f"Pendientes: {pendientes}; reforzar contacto post atención."
+        f"Acción: recuperar {pendientes} pendientes con contacto post atención el mismo día y control por técnico."
         if total_atenciones else
-        "No hay links EPA en la vista filtrada."
+        "Recomendación: no hay links EPA en la vista; validar carga WFM/EPA del periodo."
     )
 
-    titulo_recomendacion = "Recomendación sólida" if recomendacion >= 4 else "Recomendación a reforzar"
+    titulo_recomendacion = "Recomendación usuario"
     cuerpo_recomendacion = (
         f"Promedio recomendación {recomendacion:.1f}/5. "
-        "Cruzar técnicos con menor nota para acciones de coaching."
+        "Acción: cruzar técnicos con menor q5 y comentarios abiertos para coaching puntual."
         if respondidas else
-        "Sin respuestas suficientes para analizar recomendación."
+        "Recomendación: sin respuestas suficientes, no concluir performance; enfocar captura."
     )
 
     return [
@@ -9703,14 +9733,14 @@ def color_servicio_uso(servicio):
 
 
 def render_uso_herramienta_kpi_cards():
-    color_nota = VERDE if uso_promedio >= USO_HERRAMIENTA_META_PCT else CELESTE if uso_promedio >= 80 else ROSADO
+    color_nota = VERDE if uso_promedio >= USO_HERRAMIENTA_META_NOTA else CELESTE if uso_promedio >= USO_HERRAMIENTA_NOTA_BUENA else ROSADO
     render_kpi_card_grid([
-        {"icono": "&#9673;", "titulo": "Nota OT", "valor": f"{uso_promedio:.1f}", "subtitulo": "Auditoria PDF, escala 0 a 100", "color": color_nota, "badge": f"Meta {USO_HERRAMIENTA_META_PCT}", "progreso": uso_promedio},
+        {"icono": "&#9673;", "titulo": "Nota OT", "valor": f"{uso_promedio:.1f}", "subtitulo": "Auditoria PDF, escala 1 a 7", "color": color_nota, "badge": f"Meta {USO_HERRAMIENTA_META_NOTA}", "progreso": pct_desde_nota_uso(uso_promedio)},
         {"icono": "&#9606;", "titulo": "OT auditadas", "valor": uso_total, "subtitulo": f"{uso_tecnicos} tecnicos con evidencia", "color": KPI_TOTAL},
         {"icono": "&#10003;", "titulo": "Excelente/Bueno", "valor": f"{uso_pct_ok:.1f}%", "subtitulo": f"{uso_ok} OT con llenado aceptable", "color": VERDE if uso_pct_ok >= 80 else CELESTE, "progreso": uso_pct_ok},
         {"icono": "&#10005;", "titulo": "Criticas", "valor": uso_criticas, "subtitulo": f"{uso_regulares} regulares para corregir", "color": ROSADO if uso_criticas else VERDE},
         {"icono": "&#33;", "titulo": "Retiros incompletos", "valor": uso_retiros_incompletos, "subtitulo": "Sin cables/cargador/accesorios", "color": ROSADO if uso_retiros_incompletos else VERDE},
-        {"icono": "&#9673;", "titulo": "CGE sin activo", "valor": uso_cge_sin_activo, "subtitulo": "Activo fijo requerido en CGE", "color": ROSADO if uso_cge_sin_activo else VERDE},
+        {"icono": "&#9673;", "titulo": "Detalle incompleto", "valor": uso_detalle_incompleto, "subtitulo": "Equipo, serie, maquina o activo cuando aplica", "color": ROSADO if uso_detalle_incompleto else VERDE},
     ])
 
 
@@ -9801,10 +9831,10 @@ def grafico_uso_herramienta_servicio(df_base):
             "Criticas: <b>%{customdata[2]}</b><extra></extra>"
         ),
     ))
-    fig.add_vline(x=USO_HERRAMIENTA_META_PCT, line_dash="dot", line_width=2.4, line_color=VERDE)
+    fig.add_vline(x=USO_HERRAMIENTA_META_NOTA, line_dash="dot", line_width=2.4, line_color=VERDE)
     fig.update_layout(
         title=dict(
-            text="<b>Performance comparado por contratista</b><br><span style='font-size:12px;color:#BDEFFF'>Misma regla: calidad de llenado OT, evidencia de equipo, retiro y activo fijo</span>",
+            text=f"<b>Performance comparado por contratista</b><br><span style='font-size:12px;color:#BDEFFF'>Escala 1 a 7 | meta {USO_HERRAMIENTA_META_NOTA} | detalle, equipo, serie, retiro y activo cuando aplica</span>",
             x=0.02,
             xanchor="left",
             font=dict(size=17, color="#DDFBFF", family="Segoe UI Semibold"),
@@ -9815,31 +9845,58 @@ def grafico_uso_herramienta_servicio(df_base):
         plot_bgcolor="rgba(6,18,34,0.74)",
         hoverlabel=dict(bgcolor="rgba(6,18,34,0.96)", bordercolor="rgba(46,203,242,0.40)", font=dict(size=12, family="Segoe UI", color="#EAFBFF")),
     )
-    fig.update_xaxes(title=None, range=[0, 112], showgrid=True, gridcolor="rgba(143,239,255,0.14)", zeroline=False, tickfont=dict(size=12, color="#BDEFFF", family="Segoe UI Semibold"))
+    fig.update_xaxes(title=None, range=[1, 7.35], showgrid=True, gridcolor="rgba(143,239,255,0.14)", zeroline=False, tickfont=dict(size=12, color="#BDEFFF", family="Segoe UI Semibold"))
     fig.update_yaxes(title=None, automargin=True, tickfont=dict(size=12, color="#EAFBFF", family="Segoe UI Semibold"))
     return fig
 
 
-def grafico_uso_herramienta_dispersion_tecnico(df_base):
-    if df_base.empty or "tecnico" not in df_base.columns:
-        return figura_disponibilidad_vacia("Dispersion por tecnico")
+def grafico_uso_herramienta_dispersion_contextual(df_base, dimension="tecnico"):
+    etiquetas = {
+        "servicio_tecnico": ("contratista", "Dispersion por contratista"),
+        "region_atendida": ("region", "Dispersion por region"),
+        "tecnico": ("tecnico", "Dispersion por tecnico"),
+    }
+    etiqueta, titulo = etiquetas.get(dimension, etiquetas["tecnico"])
+    if df_base.empty or dimension not in df_base.columns:
+        return figura_disponibilidad_vacia(titulo)
+
     base = df_base.copy()
-    base["tecnico"] = base["tecnico"].fillna("Sin tecnico").astype(str).str.strip().replace({"": "Sin tecnico"})
-    base["servicio_tecnico"] = base.get("servicio_tecnico", base.get("st", "Sin dato")).fillna("Sin dato").astype(str).str.strip().replace({"": "Sin dato"})
+    for col, default in [
+        ("servicio_tecnico", "Sin dato"),
+        ("region_atendida", "Sin region"),
+        ("tecnico", "Sin tecnico"),
+        ("folio_ot", ""),
+        ("ticket", ""),
+        ("estado_calidad", ""),
+        ("hallazgos", ""),
+    ]:
+        if col not in base.columns:
+            base[col] = default
+        base[col] = base[col].fillna(default).astype(str).str.strip().replace({"": default})
+
     base["_fecha_graf"] = pd.to_datetime(base.get("fecha_atencion"), dayfirst=True, errors="coerce")
     base["_fecha_label"] = base["_fecha_graf"].dt.strftime("%d-%m-%Y").fillna("Sin fecha")
-    ranking = preparar_ranking_uso_tecnico(base)
-    tecnicos_top = ranking.head(14)["tecnico"].tolist() if not ranking.empty else []
-    if tecnicos_top:
-        base = base.loc[base["tecnico"].isin(tecnicos_top)].copy()
+    base["_x_label"] = base[dimension].map(lambda valor: nombre_corto_leyenda(valor, 28 if dimension == "tecnico" else 34))
+
+    limite = 3 if dimension == "servicio_tecnico" else 14
+    top_dimension = (
+        base.groupby(dimension, dropna=False)
+        .agg(ots=(dimension, "size"), nota=("puntaje_total", "mean"))
+        .sort_values(["nota", "ots"], ascending=[True, False])
+        .head(limite)
+        .index.astype(str)
+        .tolist()
+    )
+    if top_dimension:
+        base = base.loc[base[dimension].astype(str).isin(top_dimension)].copy()
     if base.empty:
-        return figura_disponibilidad_vacia("Dispersion por tecnico")
+        return figura_disponibilidad_vacia(titulo)
 
     fig = go.Figure()
     for servicio, datos in base.groupby("servicio_tecnico", dropna=False):
         color = color_servicio_uso(servicio)
         fig.add_trace(go.Scatter(
-            x=datos["tecnico"].map(lambda valor: nombre_corto_leyenda(valor, 24)),
+            x=datos["_x_label"],
             y=datos["puntaje_total"],
             mode="markers",
             name=str(servicio),
@@ -9848,22 +9905,26 @@ def grafico_uso_herramienta_dispersion_tecnico(df_base):
                 color=rgba(color, 0.82),
                 line=dict(color=color, width=2),
             ),
-            customdata=datos[["folio_ot", "ticket", "_fecha_label", "estado_calidad", "hallazgos"]].to_numpy(),
+            customdata=datos[["servicio_tecnico", "region_atendida", "tecnico", "folio_ot", "ticket", "_fecha_label", "estado_calidad", "hallazgos"]].to_numpy(),
             hovertemplate=(
-                "%{x}<br>Nota OT: <b>%{y:.1f}</b><br>"
-                "Folio: <b>%{customdata[0]}</b><br>"
-                "Ticket: <b>%{customdata[1]}</b><br>"
-                "Fecha: <b>%{customdata[2]}</b><br>"
-                "Clasificacion: <b>%{customdata[3]}</b><br>"
-                "%{customdata[4]}<extra></extra>"
+                "%{x}<br>Nota OT: <b>%{y:.1f}/7</b><br>"
+                "ST: <b>%{customdata[0]}</b><br>"
+                "Region: <b>%{customdata[1]}</b><br>"
+                "Tecnico: <b>%{customdata[2]}</b><br>"
+                "Folio: <b>%{customdata[3]}</b><br>"
+                "Ticket: <b>%{customdata[4]}</b><br>"
+                "Fecha: <b>%{customdata[5]}</b><br>"
+                "Clasificacion: <b>%{customdata[6]}</b><br>"
+                "%{customdata[7]}<extra></extra>"
             ),
         ))
-    fig.add_hrect(y0=USO_HERRAMIENTA_META_PCT, y1=100, fillcolor=rgba(VERDE, 0.10), line_width=0, layer="below")
-    fig.add_hline(y=USO_HERRAMIENTA_META_PCT, line_dash="dot", line_width=2.4, line_color=VERDE, annotation_text=f"Meta {USO_HERRAMIENTA_META_PCT}", annotation_position="top left")
-    fig.add_hline(y=65, line_dash="dot", line_width=2, line_color=ROSADO, annotation_text="Critico < 65", annotation_position="bottom left")
+
+    fig.add_hrect(y0=USO_HERRAMIENTA_META_NOTA, y1=7, fillcolor=rgba(VERDE, 0.10), line_width=0, layer="below")
+    fig.add_hline(y=USO_HERRAMIENTA_META_NOTA, line_dash="dot", line_width=2.4, line_color=VERDE, annotation_text=f"Meta {USO_HERRAMIENTA_META_NOTA}", annotation_position="top left")
+    fig.add_hline(y=USO_HERRAMIENTA_NOTA_CRITICA, line_dash="dot", line_width=2, line_color=ROSADO, annotation_text=f"Critico < {USO_HERRAMIENTA_NOTA_CRITICA}", annotation_position="bottom left")
     fig.update_layout(
         title=dict(
-            text="<b>Dispersion de calidad por tecnico</b><br><span style='font-size:12px;color:#BDEFFF'>Cada punto es una OT auditada; permite ver tendencia y variabilidad individual</span>",
+            text=f"<b>{titulo}</b><br><span style='font-size:12px;color:#BDEFFF'>Regla contextual: Todo = contratistas | ST = regiones | region filtrada = tecnicos</span>",
             x=0.02,
             xanchor="left",
             font=dict(size=17, color="#DDFBFF", family="Segoe UI Semibold"),
@@ -9875,8 +9936,8 @@ def grafico_uso_herramienta_dispersion_tecnico(df_base):
         legend=dict(orientation="h", y=1.08, x=0.5, xanchor="center", font=dict(size=12, color="#EAFBFF", family="Segoe UI Semibold")),
         hoverlabel=dict(bgcolor="rgba(6,18,34,0.96)", bordercolor="rgba(46,203,242,0.40)", font=dict(size=12, family="Segoe UI", color="#EAFBFF")),
     )
-    fig.update_xaxes(title=None, tickangle=-32, showgrid=False, zeroline=False, automargin=True, tickfont=dict(size=11, color="#BDEFFF", family="Segoe UI Semibold"))
-    fig.update_yaxes(title=dict(text="Nota OT", font=dict(size=12, color="#BDEFFF")), range=[0, 105], showgrid=True, gridcolor="rgba(143,239,255,0.14)", zeroline=False, tickfont=dict(size=12, color="#BDEFFF", family="Segoe UI Semibold"))
+    fig.update_xaxes(title=None, tickangle=-28, showgrid=False, zeroline=False, automargin=True, tickfont=dict(size=11, color="#BDEFFF", family="Segoe UI Semibold"))
+    fig.update_yaxes(title=dict(text="Nota OT (1 a 7)", font=dict(size=12, color="#BDEFFF")), range=[1, 7.25], showgrid=True, gridcolor="rgba(143,239,255,0.14)", zeroline=False, tickfont=dict(size=12, color="#BDEFFF", family="Segoe UI Semibold"))
     return fig
 
 
@@ -9901,10 +9962,10 @@ def grafico_uso_herramienta_region(df_base):
         customdata=resumen[["servicio_tecnico", "ots", "criticas"]].to_numpy(),
         hovertemplate="%{y}<br>Nota: <b>%{x:.1f}</b><br>ST: <b>%{customdata[0]}</b><br>OT: <b>%{customdata[1]}</b><br>Criticas: <b>%{customdata[2]}</b><extra></extra>",
     ))
-    fig.add_vline(x=USO_HERRAMIENTA_META_PCT, line_dash="dot", line_width=2.4, line_color=VERDE)
+    fig.add_vline(x=USO_HERRAMIENTA_META_NOTA, line_dash="dot", line_width=2.4, line_color=VERDE)
     fig.update_layout(
         title=dict(
-            text="<b>Ranking por region atendida</b><br><span style='font-size:12px;color:#BDEFFF'>Ordenado desde las regiones que requieren mayor correccion documental</span>",
+            text=f"<b>Ranking por region atendida</b><br><span style='font-size:12px;color:#BDEFFF'>Escala 1 a 7 | meta {USO_HERRAMIENTA_META_NOTA} | menor nota requiere correccion documental</span>",
             x=0.02,
             xanchor="left",
             font=dict(size=17, color="#DDFBFF", family="Segoe UI Semibold"),
@@ -9915,7 +9976,7 @@ def grafico_uso_herramienta_region(df_base):
         plot_bgcolor="rgba(6,18,34,0.74)",
         hoverlabel=dict(bgcolor="rgba(6,18,34,0.96)", bordercolor="rgba(46,203,242,0.40)", font=dict(size=12, family="Segoe UI", color="#EAFBFF")),
     )
-    fig.update_xaxes(title=None, range=[0, 112], showgrid=True, gridcolor="rgba(143,239,255,0.14)", zeroline=False, tickfont=dict(size=12, color="#BDEFFF", family="Segoe UI Semibold"))
+    fig.update_xaxes(title=None, range=[1, 7.35], showgrid=True, gridcolor="rgba(143,239,255,0.14)", zeroline=False, tickfont=dict(size=12, color="#BDEFFF", family="Segoe UI Semibold"))
     fig.update_yaxes(title=None, automargin=True, tickfont=dict(size=11, color="#EAFBFF", family="Segoe UI Semibold"))
     return fig
 
@@ -9926,25 +9987,25 @@ def construir_insights_uso_herramienta_fallback(metricas):
     pct_ok = float(metricas.get("uso_pct_ok", 0))
     criticas = int(metricas.get("uso_criticas", 0))
     retiros = int(metricas.get("uso_retiros_incompletos", 0))
-    cge_sin_activo = int(metricas.get("uso_cge_sin_activo", 0))
+    detalle_incompleto = int(metricas.get("uso_detalle_incompleto", 0))
     comparativo = str(metricas.get("comparativo_uso_herramienta_proveedor", "")).strip()
 
     if total_uso:
-        titulo_nota = "Documentacion bajo meta" if promedio < USO_HERRAMIENTA_META_PCT else "Uso de herramienta controlado"
-        cuerpo_nota = f"Nota promedio {promedio:.1f} en {total_uso} OT; {pct_ok:.1f}% esta en excelente/bueno."
+        titulo_nota = "Recomendación nota OT"
+        cuerpo_nota = f"Nota promedio {promedio:.1f}/7 en {total_uso} OT; {pct_ok:.1f}% excelente/bueno. Acción: revisar bajo {USO_HERRAMIENTA_META_NOTA} y reforzar llenado completo por región/técnico."
     else:
         titulo_nota = "Sin auditoria OT"
-        cuerpo_nota = "No hay PDF auditados para los filtros actuales o falta actualizar la base OT."
+        cuerpo_nota = "Recomendación: actualizar PST OT o ajustar filtros si esperabas PDF auditados."
 
-    titulo_riesgo = "Hallazgos documentales"
-    cuerpo_riesgo = f"{criticas} OT criticas, {retiros} retiros sin accesorios/cargador y {cge_sin_activo} casos CGE sin activo fijo."
+    titulo_riesgo = "Recomendación hallazgos"
+    cuerpo_riesgo = f"{criticas} OT críticas, {retiros} retiros incompletos y {detalle_incompleto} detalles incompletos. Acción: exigir equipo intervenido, serie, nombre de máquina ACHS y activo fijo cuando aplique."
 
-    titulo_comparativo = "Comparativo contratistas"
-    cuerpo_comparativo = comparativo or "Actualizar OT permite comparar IBM, SAO y ECC con la misma regla documental."
+    titulo_comparativo = "Recomendación contratistas"
+    cuerpo_comparativo = f"Acción: tomar el peor ST del comparativo y revisar sus OT críticas antes del comité. {comparativo}" if comparativo else "Recomendación: actualizar OT para comparar IBM, SAO y ECC con la misma regla documental."
 
     return [
-        {"indicador": "Nota", "titulo": titulo_nota, "cuerpo": cuerpo_nota, "tono": "mal" if total_uso and promedio < 80 else "accion" if total_uso and promedio < USO_HERRAMIENTA_META_PCT else "bien"},
-        {"indicador": "Hallazgos", "titulo": titulo_riesgo, "cuerpo": cuerpo_riesgo, "tono": "mal" if criticas or retiros or cge_sin_activo else "bien"},
+        {"indicador": "Nota", "titulo": titulo_nota, "cuerpo": cuerpo_nota, "tono": "mal" if total_uso and promedio < USO_HERRAMIENTA_NOTA_BUENA else "accion" if total_uso and promedio < USO_HERRAMIENTA_META_NOTA else "bien"},
+        {"indicador": "Hallazgos", "titulo": titulo_riesgo, "cuerpo": cuerpo_riesgo, "tono": "mal" if criticas or retiros or detalle_incompleto else "bien"},
         {"indicador": "Contratistas", "titulo": titulo_comparativo, "cuerpo": cuerpo_comparativo, "tono": "accion" if comparativo else "bien"},
     ]
 
@@ -10027,8 +10088,20 @@ if mostrar_kpi_epa:
 
         titulo_barra_epa = "Promedio EPA por técnico"
         if len(df_epa_respondidas):
-            dimension_barra_epa = "servicio_tecnico" if SERVICIO_COMPARATIVO and "servicio_tecnico" in df_epa_respondidas.columns else "tecnico"
-            titulo_barra_epa = "Promedio EPA por Servicio Técnico" if dimension_barra_epa == "servicio_tecnico" else "Promedio EPA por técnico"
+            region_filtrada_epa = bool(region) and len(set(map(str, region))) < len(set(map(str, regiones)))
+            if region_filtrada_epa and "tecnico" in df_epa_respondidas.columns:
+                dimension_barra_epa = "tecnico"
+            elif SERVICIO_COMPARATIVO and "servicio_tecnico" in df_epa_respondidas.columns:
+                dimension_barra_epa = "servicio_tecnico"
+            elif "region" in df_epa_respondidas.columns:
+                dimension_barra_epa = "region"
+            else:
+                dimension_barra_epa = "tecnico"
+            titulo_barra_epa = (
+                "Promedio EPA por Servicio Técnico" if dimension_barra_epa == "servicio_tecnico"
+                else "Promedio EPA por región" if dimension_barra_epa == "region"
+                else "Promedio EPA por técnico"
+            )
             por_dimension_epa = (
                 df_epa_respondidas.assign(**{
                     dimension_barra_epa: df_epa_respondidas[dimension_barra_epa].fillna("Sin dato").astype(str).str.strip().replace({"": "Sin dato"})
@@ -10165,6 +10238,7 @@ if mostrar_kpi_uso_herramienta:
         "uso_criticas": uso_criticas,
         "uso_pct_ok": uso_pct_ok,
         "uso_retiros_incompletos": uso_retiros_incompletos,
+        "uso_detalle_incompleto": uso_detalle_incompleto,
         "uso_cge_sin_activo": uso_cge_sin_activo,
         "uso_brecha_meta": uso_brecha_meta,
         "comparativo_uso_herramienta_proveedor": comparativo_uso_herramienta_proveedor,
@@ -10178,8 +10252,10 @@ if mostrar_kpi_uso_herramienta:
                 config=PLOTLY_CONFIG_SOLO_LECTURA,
             )
 
+        region_filtrada_uso = bool(region) and len(set(map(str, region))) < len(set(map(str, regiones)))
+        dimension_dispersion_uso = "tecnico" if (region_filtrada_uso or tecnico) else "servicio_tecnico" if SERVICIO_COMPARATIVO else "region_atendida"
         st.plotly_chart(
-            grafico_uso_herramienta_dispersion_tecnico(df_uso_f),
+            grafico_uso_herramienta_dispersion_contextual(df_uso_f, dimension_dispersion_uso),
             use_container_width=True,
             config=PLOTLY_CONFIG_SOLO_LECTURA,
         )
@@ -10218,7 +10294,7 @@ if mostrar_kpi_uso_herramienta:
             columnas_detalle_uso = [
                 "Servicio tecnico", "Folio OT", "Ticket", "Cliente", "Region atendida",
                 "Tecnico", "Nota OT", "Clasificacion", "Requiere retiro",
-                "Cliente CGE", "Activo fijo detectado", "Hallazgos",
+                "Requiere instalacion", "Hallazgos",
             ]
             columnas_detalle_uso = [col for col in columnas_detalle_uso if col in df_uso_export.columns]
             st.dataframe(
