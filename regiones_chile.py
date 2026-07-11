@@ -2,26 +2,27 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from functools import lru_cache
 from typing import Any
 
 
 REGION_LABELS = {
-    "ARICA": "Region de Arica y Parinacota",
-    "TARAPACA": "Region de Tarapaca",
-    "ANTOFAGASTA": "Region de Antofagasta",
-    "ATACAMA": "Region de Atacama",
-    "COQUIMBO": "Region de Coquimbo",
-    "VALPARAISO": "Region de Valparaiso",
-    "METROPOLITANA": "Region Metropolitana",
-    "OHIGGINS": "Region de O'Higgins",
-    "MAULE": "Region del Maule",
-    "NUBLE": "Region de Nuble",
-    "BIOBIO": "Region del Biobio",
-    "ARAUCANIA": "Region de La Araucania",
-    "LOS RIOS": "Region de Los Rios",
-    "LOS LAGOS": "Region de Los Lagos",
-    "AYSEN": "Region de Aysen",
-    "MAGALLANES": "Region de Magallanes",
+    "ARICA": "Región de Arica y Parinacota",
+    "TARAPACA": "Región de Tarapacá",
+    "ANTOFAGASTA": "Región de Antofagasta",
+    "ATACAMA": "Región de Atacama",
+    "COQUIMBO": "Región de Coquimbo",
+    "VALPARAISO": "Región de Valparaíso",
+    "METROPOLITANA": "Región Metropolitana",
+    "OHIGGINS": "Región de O'Higgins",
+    "MAULE": "Región del Maule",
+    "NUBLE": "Región de Ñuble",
+    "BIOBIO": "Región del Biobío",
+    "ARAUCANIA": "Región de La Araucanía",
+    "LOS RIOS": "Región de Los Ríos",
+    "LOS LAGOS": "Región de Los Lagos",
+    "AYSEN": "Región de Aysén",
+    "MAGALLANES": "Región de Magallanes",
 }
 
 REGION_ALIASES = {
@@ -34,9 +35,9 @@ REGION_ALIASES = {
     "METROPOLITANA": ["METROPOLITANA", "XIII REGION", "REGION RM", "SANTIAGO", "PROVIDENCIA"],
     "OHIGGINS": ["OHIGGINS", "O HIGGINS", "VI REGION", "RANCAGUA", "MACHALI"],
     "MAULE": ["MAULE", "VII REGION", "TALCA", "CURICO", "LINARES"],
-    "NUBLE": ["NUBLE", "XVI REGION", "CHILLAN"],
-    "BIOBIO": ["BIO BIO", "BIOBIO", "VIII REGION", "CONCEPCION", "LOS ANGELES", "CANETE"],
-    "ARAUCANIA": ["ARAUCANIA", "IX REGION", "TEMUCO", "VILLARRICA"],
+    "NUBLE": ["NUBLE", "AUBLE", "XVI REGION", "CHILLAN"],
+    "BIOBIO": ["BIO BIO", "BIOBIO", "BIO BAO", "BIOBAO", "VIII REGION", "CONCEPCION", "LOS ANGELES", "CANETE"],
+    "ARAUCANIA": ["ARAUCANIA", "ARAUCANAA", "IX REGION", "TEMUCO", "VILLARRICA"],
     "LOS RIOS": ["LOS RIOS", "XIV REGION", "VALDIVIA"],
     "LOS LAGOS": ["LOS LAGOS", "X REGION", "PUERTO MONTT", "OSORNO", "CASTRO", "QUELLON"],
     "AYSEN": ["AYSEN", "XI REGION", "COYHAIQUE"],
@@ -69,6 +70,7 @@ COMUNA_REGION = {
     "LOS ANDES": "VALPARAISO",
     "SAN FELIPE": "VALPARAISO",
     "SANTIAGO": "METROPOLITANA",
+    "LA FLORIDA": "METROPOLITANA",
     "PROVIDENCIA": "METROPOLITANA",
     "LAS CONDES": "METROPOLITANA",
     "LA REINA": "METROPOLITANA",
@@ -82,13 +84,62 @@ COMUNA_REGION = {
     "CURICO": "MAULE",
     "LINARES": "MAULE",
     "CHILLAN": "NUBLE",
+    "CHILLAN VIEJO": "NUBLE",
+    "BULNES": "NUBLE",
+    "COBQUECURA": "NUBLE",
+    "COELEMU": "NUBLE",
+    "COIHUECO": "NUBLE",
+    "EL CARMEN": "NUBLE",
+    "NINHUE": "NUBLE",
+    "NIQUEN": "NUBLE",
+    "PEMUCO": "NUBLE",
+    "PINTO": "NUBLE",
+    "PORTEZUELO": "NUBLE",
+    "QUILLON": "NUBLE",
+    "QUIRIHUE": "NUBLE",
+    "RANQUIL": "NUBLE",
+    "SAN CARLOS": "NUBLE",
+    "SAN FABIAN": "NUBLE",
+    "SAN NICOLAS": "NUBLE",
+    "TREGUACO": "NUBLE",
+    "YUNGAY": "NUBLE",
     "CONCEPCION": "BIOBIO",
     "LOS ANGELES": "BIOBIO",
     "CANETE": "BIOBIO",
     "CAÑETE": "BIOBIO",
+    "ANTUCO": "BIOBIO",
+    "ARAUCO": "BIOBIO",
+    "CABRERO": "BIOBIO",
+    "CHIGUAYANTE": "BIOBIO",
+    "CONTULMO": "BIOBIO",
+    "CORONEL": "BIOBIO",
+    "CURANILAHUE": "BIOBIO",
+    "FLORIDA": "BIOBIO",
+    "HUALPEN": "BIOBIO",
+    "HUALQUI": "BIOBIO",
+    "LAJA": "BIOBIO",
+    "LEBU": "BIOBIO",
+    "LOS ALAMOS": "BIOBIO",
+    "LOTA": "BIOBIO",
+    "MULCHEN": "BIOBIO",
+    "NACIMIENTO": "BIOBIO",
+    "NEGRETE": "BIOBIO",
+    "PENCO": "BIOBIO",
+    "QUILACO": "BIOBIO",
+    "QUILLECO": "BIOBIO",
+    "SAN PEDRO DE LA PAZ": "BIOBIO",
+    "SAN ROSENDO": "BIOBIO",
+    "SANTA BARBARA": "BIOBIO",
+    "SANTA JUANA": "BIOBIO",
+    "TALCAHUANO": "BIOBIO",
+    "TIRUA": "BIOBIO",
+    "TOME": "BIOBIO",
+    "TUCAPEL": "BIOBIO",
+    "YUMBEL": "BIOBIO",
     "TEMUCO": "ARAUCANIA",
     "VILLARRICA": "ARAUCANIA",
     "VALDIVIA": "LOS RIOS",
+    "LOS LAGOS": "LOS RIOS",
     "PUERTO MONTT": "LOS LAGOS",
     "OSORNO": "LOS LAGOS",
     "CASTRO": "LOS LAGOS",
@@ -98,24 +149,46 @@ COMUNA_REGION = {
 }
 
 
+@lru_cache(maxsize=4096)
+def reparar_mojibake(valor: Any) -> str:
+    texto = "" if valor is None else str(valor)
+    for _ in range(2):
+        if not any(marca in texto for marca in ("Ã", "Â", "â")):
+            break
+        try:
+            reparado = texto.encode("latin1").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            break
+        if reparado == texto:
+            break
+        texto = reparado
+    return texto
+
+
+@lru_cache(maxsize=4096)
 def normalizar_texto(valor: Any) -> str:
-    texto = str(valor or "").upper().strip().replace("\xa0", " ")
+    texto = reparar_mojibake(valor).upper().strip().replace("\xa0", " ")
     texto = unicodedata.normalize("NFKD", texto)
     texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
     texto = re.sub(r"[^A-Z0-9]+", " ", texto)
-    return re.sub(r"\s+", " ", texto).strip()
+    texto = re.sub(r"\s+", " ", texto).strip()
+    return "" if texto in {"", "NAN", "NONE", "NULL", "NA"} else texto
 
 
+@lru_cache(maxsize=4096)
 def normalizar_region_chile(valor: Any) -> str:
     norm = normalizar_texto(valor)
     if not norm:
         return ""
     for key, aliases in REGION_ALIASES.items():
-        if any(alias in norm for alias in aliases):
-            return REGION_LABELS[key]
-    return str(valor or "").strip()
+        for alias in aliases:
+            alias_norm = normalizar_texto(alias)
+            if re.search(rf"(?<![A-Z0-9]){re.escape(alias_norm)}(?![A-Z0-9])", norm):
+                return REGION_LABELS[key]
+    return reparar_mojibake(valor).strip()
 
 
+@lru_cache(maxsize=4096)
 def region_desde_ciudad(ciudad: Any) -> str:
     norm = normalizar_texto(ciudad)
     if not norm:
@@ -125,9 +198,10 @@ def region_desde_ciudad(ciudad: Any) -> str:
         if re.search(rf"(?<![A-Z0-9]){re.escape(comuna_norm)}(?![A-Z0-9])", norm):
             return REGION_LABELS[region_key]
     region = normalizar_region_chile(norm)
-    return region if region.startswith("Region ") else ""
+    return region if normalizar_texto(region).startswith("REGION ") else ""
 
 
+@lru_cache(maxsize=8192)
 def region_por_ciudad_o_comuna(ciudad: Any, region_actual: Any = "") -> str:
     por_ciudad = region_desde_ciudad(ciudad)
     if por_ciudad:
@@ -139,8 +213,8 @@ def region_por_ciudad_o_comuna(ciudad: Any, region_actual: Any = "") -> str:
 def corregir_region_por_ciudad(df: Any, ciudad_col: str = "Ciudad", region_col: str = "Estado") -> Any:
     if df is None or ciudad_col not in df.columns or region_col not in df.columns:
         return df
-    df[region_col] = df.apply(
-        lambda row: region_por_ciudad_o_comuna(row.get(ciudad_col, ""), row.get(region_col, "")),
-        axis=1,
-    )
+    df[region_col] = [
+        region_por_ciudad_o_comuna(ciudad, region)
+        for ciudad, region in zip(df[ciudad_col].fillna(""), df[region_col].fillna(""))
+    ]
     return df

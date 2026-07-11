@@ -1,4 +1,4 @@
-﻿import streamlit as st
+import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
@@ -7,15 +7,13 @@ import unicodedata
 import base64
 import hashlib
 import html
-import json
 import re
 import os
 import sqlite3
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
-from urllib import error as urlerror
-from urllib import request as urlrequest
-from regiones_chile import corregir_region_por_ciudad, region_por_ciudad_o_comuna
+from regiones_chile import corregir_region_por_ciudad, normalizar_region_chile, region_por_ciudad_o_comuna
 
 # =========================================================
 # CONFIG
@@ -174,11 +172,16 @@ SERVICIOS_ACTIVOS = list(SERVICIOS_CONFIG.keys()) if SERVICIO_COMPARATIVO else [
 SERVICIO_TITULO = "IBM + SAO + ECC" if SERVICIO_COMPARATIVO else SERVICIO_ACTUAL
 SERVICIO_CONFIG = SERVICIOS_CONFIG[SERVICIOS_ACTIVOS[0]]
 
+FILTROS_DEFAULT_VERSION = "2026-07-11-regiones-canonicas-v1"
 servicio_anterior_filtros = st.session_state.get("_servicio_filtros_actual")
-if servicio_anterior_filtros is not None and servicio_anterior_filtros != SERVICIO_ACTUAL:
+reiniciar_filtros = (
+    (servicio_anterior_filtros is not None and servicio_anterior_filtros != SERVICIO_ACTUAL)
+    or st.session_state.get("_filtros_default_version") != FILTROS_DEFAULT_VERSION
+)
+if reiniciar_filtros:
     claves_a_limpiar = [
         key for key in st.session_state.keys()
-        if key.startswith(("reg_", "tec_", "mes_", "cli_", "disp_cli_", "disp_zona_", "disp_estado_"))
+        if key.startswith(("reg_", "tec_", "mes_", "cli_", "disp_cli_", "disp_zona_", "disp_coord_", "disp_estado_"))
         or key in {
             "disp_cli_pills", "disp_zona_pills", "disp_estado_pills", "disp_mes_pills",
             "toggle_clientes_disponibilidad_pills_empty_intent",
@@ -191,6 +194,7 @@ if servicio_anterior_filtros is not None and servicio_anterior_filtros != SERVIC
     for key in claves_a_limpiar:
         st.session_state.pop(key, None)
 st.session_state["_servicio_filtros_actual"] = SERVICIO_ACTUAL
+st.session_state["_filtros_default_version"] = FILTROS_DEFAULT_VERSION
 
 ARCHIVO = APP_DIR / str(SERVICIO_CONFIG["archivo"])
 EPA_DIR = APP_DIR / str(SERVICIO_CONFIG["epa_dir"])
@@ -313,4996 +317,31 @@ def pct_desde_nota_uso(valor):
 # CSS CORPORATIVO V3
 # =========================================================
 
-st.markdown(f"""
-<style>
-
-/*======================================================
-FONDO GENERAL
-======================================================*/
-
-.stApp{{
-    background:linear-gradient(180deg,#FCFCFD 0%,#F4F7FB 100%);
-}}
-
-/*======================================================
-SIDEBAR
-======================================================*/
-
-section[data-testid="stSidebar"]{{
-    background:linear-gradient(180deg,#000000 0%,#080808 100%);
-    border-right:2px solid #10069F;
-    min-width:320px !important;
-    max-width:320px !important;
-}}
-
-section[data-testid="stSidebar"] img{{
-    margin:auto;
-    display:block;
-}}
-
-hr{{
-    margin-top:12px;
-    margin-bottom:18px;
-    border:0;
-    border-top:1px solid #E8ECF4;
-}}
-
-/*======================================================
-TITULOS
-======================================================*/
-
-.titulo{{
-
-    color:#10069F;
-    font-size:64px;
-    font-weight:800;
-    letter-spacing:-2px;
-    line-height:1;
-    margin-bottom:6px;
-    text-shadow:0 3px 10px rgba(16,6,159,.10);
-
-}}
-
-.subtitulo{{
-  color:#64748B;
-    font-size:20px;
-    font-weight:500;
-    margin-top:8px;
-    letter-spacing:.2px;
-}}
-
-.linea-titulo{{
- width:230px;
-    height:6px;
-    background:linear-gradient(90deg,#10069F,#005CFF);
-    border-radius:30px;
-    margin-top:14px;
-    margin-bottom:18px;
-    box-shadow:0px 3px 10px rgba(16,6,159,.18);
-}}
-
-/*=============================================
-TITULO SECCION KPI
-=============================================*/
-
-.kpi-section{{
-    display:flex;
-    align-items:center;
-    gap:12px;
-
-    margin-top:40px;
-    margin-bottom:28px;
-
-    padding-bottom:12px;
-
-    border-bottom:2px solid #E8ECF4;
-}}
-
-.kpi-icon{{
-    width:42px;
-    height:42px;
-    border-radius:10px;
-    background:#10069F;
-    color:white;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    font-size:22px;
-    font-weight:900;
-    box-shadow:0 4px 12px rgba(16,6,159,.20);
-}}
-
-.kpi-square{{
-    width:16px;
-    height:16px;
-    border-radius:4px;
-    background:#10069F;
-}}
-
-.kpi-title{{
-    font-size:28px;
-
-    font-weight:900;
-
-    color:#0F172A;
-
-    margin-top:28px;
-
-    margin-bottom:12px;
-
-    letter-spacing:-0.3px;
-}}
-
-.kpi-divider{{
-    width:100%;
-
-    height:4px;
-
-    background:#10069F;
-
-    border-radius:30px;
-
-    margin-bottom:30px;
-}}
-
-
-.separador-dashboard{{
-    width:100%;
-    height:4px;
-    margin-top:24px;
-    margin-bottom:14px;
-
-    background:linear-gradient(
-        90deg,
-        #10069F 0%,
-        #005CFF 25%,
-        #2ECBF2 50%,
-        #005CFF 75%,
-        #10069F 100%
-    );
-
-    border-radius:20px;
-
-    box-shadow:0 2px 10px rgba(16,6,159,.12);
-}}
-
-.titulo-seccion{{
-    color:#FFFFFF;
-    font-size:22px;
-    font-weight:800;
-    letter-spacing:.4px;
-    margin-bottom:18px;
-}}
-
-/*======================================================
-KPI
-======================================================*/
-
-.kpi-card{{
-    background:white;
-    padding:22px;
-    border-radius:18px;
-
-    border:1px solid #EDF2F7;
-
-    box-shadow:
-        0px 8px 25px rgba(15,23,42,.05);
-
-    transition:.25s;
-}}
-
-.kpi-card:hover{{
-
-    transform:translateY(-4px);
-
-    box-shadow:
-        0px 18px 35px rgba(16,6,159,.12);
-
-}}
-
-.kpi-card h4{{
-
-    color:#0F172A;
-
-    font-size:24px;
-
-    font-weight:900;
-
-}}
-
-.kpi-card h1{{
-
-    font-size:52px;
-
-    font-weight:800;
-
-}}
-
-.kpi-card p{{
-
-    color:#64748B;
-
-    font-size:19px;
-
-}}
-
-.disp-kpi-grid{{
-    display:grid;
-    grid-template-columns:repeat(auto-fit,minmax(145px,1fr));
-    gap:8px;
-    max-width:100%;
-    margin:0 0 14px 0;
-}}
-
-.disp-kpi-card{{
-    position:relative;
-    min-width:0;
-    height:146px;
-    overflow:hidden;
-    border:1px solid color-mix(in srgb,var(--accent) 54%,transparent);
-    border-radius:8px;
-    background:
-        radial-gradient(circle at 74% 50%,color-mix(in srgb,var(--accent) 16%,transparent),transparent 28%),
-        linear-gradient(135deg,rgba(6,18,34,.92),rgba(8,22,39,.84));
-    box-shadow:
-        0 18px 34px rgba(0,0,0,.24),
-        inset 0 1px 0 rgba(255,255,255,.08);
-    padding:17px 14px 14px 64px;
-}}
-
-.disp-kpi-card::before{{
-    content:"";
-    position:absolute;
-    top:0;
-    left:0;
-    right:0;
-    height:3px;
-    background:var(--accent);
-    box-shadow:0 0 18px color-mix(in srgb,var(--accent) 62%,transparent);
-}}
-
-.disp-kpi-icon{{
-    position:absolute;
-    left:16px;
-    top:18px;
-    width:36px;
-    height:36px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    border:1px solid color-mix(in srgb,var(--accent) 46%,transparent);
-    border-radius:50%;
-    color:var(--accent);
-    background:color-mix(in srgb,var(--accent) 13%,transparent);
-    font-size:25px;
-    font-weight:950;
-    line-height:1;
-}}
-
-.disp-kpi-title{{
-    color:#EAFBFF;
-    font-size:12.5px;
-    font-weight:900;
-    line-height:1.15;
-    min-height:29px;
-    white-space:normal;
-    overflow:visible;
-    text-overflow:clip;
-}}
-
-.disp-kpi-value-row{{
-    display:flex;
-    align-items:center;
-    gap:6px;
-    margin-top:5px;
-    min-width:0;
-}}
-
-.disp-kpi-value{{
-    color:var(--accent);
-    font-size:clamp(40px,3.2vw,54px);
-    font-weight:950;
-    line-height:1.08;
-    white-space:nowrap;
-}}
-
-.disp-kpi-card.is-text-value .disp-kpi-value{{
-    max-width:100%;
-    font-size:clamp(24px,2vw,31px);
-    overflow:hidden;
-    text-overflow:ellipsis;
-}}
-
-.disp-kpi-badge{{
-    flex:0 0 auto;
-    color:var(--accent);
-    font-size:10px;
-    font-weight:950;
-    padding:4px 6px;
-    border:1px solid color-mix(in srgb,var(--accent) 36%,transparent);
-    background:color-mix(in srgb,var(--accent) 14%,transparent);
-}}
-
-.disp-kpi-subtitle{{
-    margin-top:4px;
-    color:#BDEFFF;
-    font-size:10.2px;
-    font-weight:850;
-    line-height:1.18;
-    white-space:normal;
-}}
-
-.ai-insight-grid{{
-    display:grid;
-    grid-template-columns:repeat(3,minmax(0,1fr));
-    gap:10px;
-    margin:2px 0 14px 0;
-}}
-
-.ai-insight-card{{
-    min-height:118px;
-    border:1px solid color-mix(in srgb,var(--accent) 52%,transparent);
-    border-radius:8px;
-    padding:14px 15px 13px;
-    background:
-        radial-gradient(circle at 82% 32%,color-mix(in srgb,var(--accent) 14%,transparent),transparent 30%),
-        linear-gradient(135deg,rgba(6,18,34,.91),rgba(9,16,30,.84));
-    box-shadow:0 16px 32px rgba(0,0,0,.20), inset 0 1px 0 rgba(255,255,255,.08);
-}}
-
-.ai-insight-kicker{{
-    color:var(--accent);
-    font-size:10px;
-    font-weight:950;
-    letter-spacing:.05em;
-    text-transform:uppercase;
-    margin-bottom:6px;
-}}
-
-.ai-insight-title{{
-    color:#F4FCFF;
-    font-size:17px;
-    font-weight:950;
-    line-height:1.12;
-    margin-bottom:7px;
-}}
-
-.ai-insight-body{{
-    color:#BDEFFF;
-    font-size:12px;
-    font-weight:780;
-    line-height:1.33;
-}}
-
-.no-data-shell{{
-    min-height:250px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    gap:18px;
-    padding:34px 30px;
-    margin:10px 0 18px;
-    border:1px solid rgba(46,203,242,.32);
-    border-radius:8px;
-    background:
-        linear-gradient(135deg,rgba(6,18,34,.88),rgba(8,20,38,.76) 58%,rgba(255,61,0,.055));
-    box-shadow:0 18px 36px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.08);
-}}
-
-.no-data-logo-wrap{{
-    width:72px;
-    height:72px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    border:1px solid rgba(46,203,242,.34);
-    border-radius:8px;
-    background:linear-gradient(145deg,rgba(0,0,0,.72),rgba(7,18,34,.84));
-    box-shadow:0 0 0 1px rgba(255,255,255,.05),0 12px 24px rgba(0,0,0,.22);
-    flex:0 0 auto;
-}}
-
-.no-data-logo-wrap img{{
-    width:44px;
-    height:auto;
-    filter:drop-shadow(0 0 8px rgba(46,203,242,.34));
-}}
-
-.no-data-copy{{
-    min-width:0;
-}}
-
-.no-data-kicker{{
-    color:{CELESTE};
-    font-size:11px;
-    font-weight:950;
-    letter-spacing:.08em;
-    text-transform:uppercase;
-    margin-bottom:6px;
-}}
-
-.no-data-title{{
-    color:#F4FCFF;
-    font-size:24px;
-    font-weight:950;
-    line-height:1.08;
-}}
-
-.no-data-detail{{
-    color:#BDEFFF;
-    font-size:13px;
-    font-weight:780;
-    line-height:1.35;
-    margin-top:8px;
-    max-width:760px;
-}}
-
-@media (max-width: 980px){{
-    .ai-insight-grid{{
-        grid-template-columns:1fr;
-    }}
-    .no-data-shell{{
-        flex-direction:column;
-        text-align:center;
-    }}
-}}
-
-div[data-testid="stTabs"] [data-baseweb="tab-list"]{{
-    gap:8px !important;
-    border-bottom:1px solid rgba(148,163,184,.18) !important;
-    overflow-x:auto !important;
-    padding-bottom:0 !important;
-}}
-
-div[data-testid="stTabs"] [data-baseweb="tab"]{{
-    min-height:38px !important;
-    padding:0 13px !important;
-    border:1px solid transparent !important;
-    border-bottom:0 !important;
-    border-radius:8px 8px 0 0 !important;
-    background:rgba(255,255,255,.018) !important;
-    transition:background .16s ease,border-color .16s ease,color .16s ease;
-}}
-
-div[data-testid="stTabs"] [data-baseweb="tab"] p{{
-    color:#EAFBFF !important;
-    font-size:13px !important;
-    font-weight:900 !important;
-}}
-
-div[data-testid="stTabs"] [data-baseweb="tab"]:hover{{
-    background:rgba(255,255,255,.065) !important;
-    border-color:rgba(255,255,255,.16) !important;
-}}
-
-div[data-testid="stTabs"] [data-baseweb="tab"][aria-selected="true"]{{
-    background:linear-gradient(180deg,rgba(255,61,22,.16),rgba(255,61,22,.025)) !important;
-    border-color:rgba(255,61,22,.48) !important;
-    box-shadow:inset 0 -3px 0 {NARANJO};
-}}
-
-div[data-testid="stTabs"] [data-baseweb="tab"][aria-selected="true"] p{{
-    color:#FFFFFF !important;
-}}
-
-.disp-kpi-progress{{
-    position:absolute;
-    left:72px;
-    right:18px;
-    bottom:13px;
-    height:5px;
-    background:rgba(143,239,255,.14);
-}}
-
-.disp-kpi-progress-fill{{
-    height:100%;
-    width:var(--progress);
-    max-width:100%;
-    background:var(--accent);
-    box-shadow:0 0 14px color-mix(in srgb,var(--accent) 52%,transparent);
-}}
-
-/*======================================================
-CONTENEDORES GRAFICOS
-======================================================*/
-
-.chart-card{{
-
-    background:white;
-
-    border-radius:20px;
-
-    padding:18px;
-
-    border:1px solid #EEF2F7;
-
-    box-shadow:
-        0px 8px 25px rgba(15,23,42,.05);
-
-}}
-
-/*======================================================
-TABLAS
-======================================================*/
-
-thead tr th{{
-
-    background:{AZUL};
-
-    color:white !important;
-
-    font-size:15px;
-
-}}
-
-tbody tr:nth-child(even){{
-    background:#FAFBFD;
-}}
-
-tbody tr:hover{{
-    background:#EEF5FF;
-}}
-
-/*======================================================
-BOTONES
-======================================================*/
-
-.stButton button{{
-
-    border-radius:12px;
-
-    background:{AZUL};
-
-    color:white;
-
-    border:none;
-
-}}
-
-.stButton button:hover{{
-
-    background:{AZUL_CLARO};
-
-}}
-
-/*======================================================
-SELECTORES PREMIUM ENTEL
-======================================================*/
-
-div[data-baseweb="select"]{{
-
-    min-height:58px;
-    border-radius:18px !important;
-    border:2px solid #10069F !important;
-    background:linear-gradient(180deg,#FFFFFF,#F6F9FF) !important;
-    box-shadow:0 8px 20px rgba(16,6,159,.12);
-    font-size:16px;
-    font-weight:900;
-}}
-
-div[data-baseweb="select"]:hover{{
-    border:2px solid #2ECBF2 !important;
-    box-shadow:0 10px 25px rgba(46,203,242,.25);
-}}
-
-div[data-baseweb="tag"]{{
-    background:linear-gradient(90deg,#10069F,#005CFF) !important;
-    color:white !important;
-    border:none !important;
-    border-radius:18px !important;
-    font-size:15px !important;
-    font-weight:700 !important;
-    padding:6px 10px !important;
-}}
-
-
-
-/* Sidebar checkbox style */
-div[data-testid="stCheckbox"]{{padding-bottom:2px;}}
-div[data-testid="stCheckbox"] label{{color:white !important;font-weight:700 !important;font-size:15px !important;}}
-
-/* ===== EXPANDER PREMIUM ===== */
-div[data-testid="stExpander"]{{
-    background:#0F1117 !important;
-    border:1px solid #1F3B8F !important;
-    border-radius:12px !important;
-    margin-bottom:12px !important;
-}}
-div[data-testid="stExpander"] details summary,
-div[data-testid="stExpander"] details summary:hover,
-div[data-testid="stExpander"] details summary:focus,
-div[data-testid="stExpander"] details summary:active{{
-    color:#FFFFFF !important;
-    background:#0F1117 !important;
-}}
-
-div[data-testid="stExpander"] details summary *,
-div[data-testid="stExpander"] details summary p,
-div[data-testid="stExpander"] details summary span,
-div[data-testid="stExpander"] details summary svg{{
-    color:#FFFFFF !important;
-    fill:#FFFFFF !important;
-    stroke:#FFFFFF !important;
-    opacity:1 !important;
-    font-size:20px !important;
-    font-weight:800 !important;
-}}
-div[data-testid="stExpander"] svg{{
-    width:30px !important;
-    height:30px !important;
-    color:#FFFFFF !important;
-}}
-div[data-testid="stExpanderContent"]{{
-    background:#0F1117 !important;
-    border-radius:0 0 12px 12px !important;
-    padding:10px !important;
-}}
-
-/* Todo el texto del contenido en blanco */
-div[data-testid="stExpanderContent"] *,
-div[data-testid="stCheckbox"] label,
-div[data-testid="stCheckbox"] p,
-div[data-testid="stCheckbox"] span{{
-    color:#FFFFFF !important;
-    font-size:15px !important;
-    font-weight:700 !important;
-}}
-
-/* Etiqueta del buscador */
-div[data-testid="stTextInput"] label{{
-    color:#FFFFFF !important;
-}}
-
-/* Caja del buscador */
-div[data-testid="stTextInput"] input{{
-    color:#FFFFFF !important;
-    background:#1A1A1A !important;
-    border:1px solid #3B82F6 !important;
-}}
-
-div[data-testid="stTextInput"] input::placeholder{{
-    color:#BDBDBD !important;
-}}
-
-/*======================================================
-SIDEBAR PREMIUM CONTROL CENTER
-======================================================*/
-
-section[data-testid="stSidebar"]{{
-    background:
-        linear-gradient(180deg,#050507 0%,#080A12 46%,#000000 100%) !important;
-    border-right:1px solid rgba(46,203,242,.45) !important;
-    box-shadow:18px 0 40px rgba(16,6,159,.20);
-}}
-
-section[data-testid="stSidebar"] > div:first-child{{
-    padding-left:16px;
-    padding-right:16px;
-}}
-
-.filter-hero{{
-    position:relative;
-    padding:17px 16px 15px 16px;
-    margin:4px 0 16px 0;
-    background:
-        linear-gradient(145deg,rgba(16,6,159,.62),rgba(0,92,255,.28) 48%,rgba(46,203,242,.12));
-    border:1px solid rgba(46,203,242,.40);
-    box-shadow:
-        0 18px 36px rgba(0,0,0,.32),
-        inset 0 1px 0 rgba(255,255,255,.18);
-}}
-
-.filter-hero::after{{
-    content:"";
-    position:absolute;
-    left:14px;
-    right:14px;
-    bottom:0;
-    height:3px;
-    background:linear-gradient(90deg,{VERDE},{CELESTE},{ROSADO});
-}}
-
-.filter-eyebrow{{
-    color:{CELESTE};
-    font-size:11px;
-    font-weight:900;
-    letter-spacing:.12em;
-    text-transform:uppercase;
-    margin-bottom:5px;
-}}
-
-.filter-title{{
-    color:#FFFFFF;
-    font-size:24px;
-    font-weight:900;
-    line-height:1.05;
-    letter-spacing:-.2px;
-}}
-
-.filter-subtitle{{
-    color:#C7D2FE;
-    font-size:12px;
-    font-weight:700;
-    margin-top:8px;
-}}
-
-.filter-stat-row{{
-    display:grid;
-    grid-template-columns:1fr 1fr;
-    gap:8px;
-    margin-top:12px;
-}}
-
-.filter-stat{{
-    padding:9px 10px;
-    background:rgba(255,255,255,.08);
-    border:1px solid rgba(255,255,255,.12);
-}}
-
-.filter-stat b{{
-    display:block;
-    color:#FFFFFF;
-    font-size:18px;
-    line-height:1;
-}}
-
-.filter-stat span{{
-    display:block;
-    color:#CBD5E1;
-    font-size:10px;
-    font-weight:800;
-    margin-top:4px;
-}}
-
-section[data-testid="stSidebar"] hr{{
-    border-top:1px solid rgba(148,163,184,.22) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]{{
-    background:linear-gradient(180deg,rgba(15,17,27,.98),rgba(8,10,18,.98)) !important;
-    border:1px solid rgba(46,203,242,.36) !important;
-    box-shadow:
-        0 14px 26px rgba(0,0,0,.32),
-        inset 0 1px 0 rgba(255,255,255,.08);
-    border-radius:10px !important;
-    overflow:hidden;
-    margin-bottom:14px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:hover{{
-    border-color:rgba(71,225,144,.55) !important;
-    box-shadow:
-        0 16px 30px rgba(0,0,0,.38),
-        0 0 0 1px rgba(71,225,144,.10),
-        inset 0 1px 0 rgba(255,255,255,.10);
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:hover,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:focus,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:active{{
-    min-height:50px;
-    padding:12px 14px !important;
-    background:
-        linear-gradient(90deg,rgba(16,6,159,.42),rgba(46,203,242,.10)) !important;
-    border-bottom:1px solid rgba(148,163,184,.22);
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary *{{
-    color:#FFFFFF !important;
-    font-size:17px !important;
-    font-weight:900 !important;
-    letter-spacing:.01em;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpanderContent"]{{
-    background:linear-gradient(180deg,rgba(10,12,20,.98),rgba(6,8,14,.98)) !important;
-    padding:12px 12px 14px 12px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stButton"] button{{
-    min-height:34px;
-    border-radius:8px !important;
-    background:linear-gradient(135deg,{AZUL},{AZUL_CLARO}) !important;
-    border:1px solid rgba(46,203,242,.42) !important;
-    color:#FFFFFF !important;
-    box-shadow:0 8px 18px rgba(0,92,255,.20);
-    font-size:12px !important;
-    font-weight:900 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stButton"] button:hover{{
-    background:linear-gradient(135deg,{AZUL_CLARO},{CELESTE}) !important;
-    border-color:rgba(71,225,144,.65) !important;
-    transform:translateY(-1px);
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stTextInput"] label p{{
-    color:#DDE7FF !important;
-    font-size:12px !important;
-    font-weight:900 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stTextInput"] input{{
-    min-height:42px;
-    color:#FFFFFF !important;
-    background:linear-gradient(180deg,#101827,#0A0F1B) !important;
-    border:1px solid rgba(46,203,242,.62) !important;
-    box-shadow:
-        inset 0 1px 0 rgba(255,255,255,.08),
-        0 10px 20px rgba(0,0,0,.24);
-    font-weight:800 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stTextInput"] input:focus{{
-    border-color:{VERDE} !important;
-    box-shadow:0 0 0 2px rgba(71,225,144,.18), 0 10px 22px rgba(0,0,0,.28);
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]{{
-    padding:5px 7px !important;
-    margin:3px 0 !important;
-    background:rgba(255,255,255,.035);
-    border:1px solid rgba(255,255,255,.055);
-    border-radius:9px;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:hover{{
-    background:rgba(46,203,242,.08);
-    border-color:rgba(46,203,242,.36);
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label p,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label span{{
-    color:#FFFFFF !important;
-    font-size:13px !important;
-    font-weight:850 !important;
-    line-height:1.25 !important;
-}}
-
-.filter-mini-note{{
-    color:#94A3B8;
-    font-size:11px;
-    font-weight:800;
-    margin:3px 0 10px 0;
-}}
-
-/*======================================================
-SIDEBAR PREMIUM V2 - COMMAND CENTER
-======================================================*/
-
-section[data-testid="stSidebar"]{{
-    background:
-        radial-gradient(circle at 12% 0%,rgba(46,203,242,.22),transparent 28%),
-        radial-gradient(circle at 100% 12%,rgba(253,108,152,.12),transparent 24%),
-        linear-gradient(180deg,#060711 0%,#090B14 48%,#020205 100%) !important;
-    border-right:1px solid rgba(46,203,242,.42) !important;
-}}
-
-section[data-testid="stSidebar"] > div:first-child{{
-    padding:20px 16px 24px 16px;
-}}
-
-.filter-hero{{
-    padding:0 !important;
-    margin:8px 0 18px 0 !important;
-    background:transparent !important;
-    border:0 !important;
-    box-shadow:none !important;
-}}
-
-.filter-hero::after{{
-    display:none !important;
-}}
-
-.control-glass{{
-    position:relative;
-    overflow:hidden;
-    padding:18px 16px 16px 16px;
-    background:
-        linear-gradient(145deg,rgba(255,255,255,.12),rgba(255,255,255,.045)),
-        linear-gradient(135deg,rgba(16,6,159,.55),rgba(0,92,255,.22) 58%,rgba(46,203,242,.16));
-    border:1px solid rgba(255,255,255,.18);
-    border-radius:18px;
-    box-shadow:
-        0 22px 42px rgba(0,0,0,.34),
-        inset 0 1px 0 rgba(255,255,255,.22);
-}}
-
-.control-glass::before{{
-    content:"";
-    position:absolute;
-    inset:-45% -20% auto auto;
-    width:150px;
-    height:150px;
-    background:radial-gradient(circle,rgba(71,225,144,.35),transparent 62%);
-}}
-
-.control-glass::after{{
-    content:"";
-    position:absolute;
-    left:16px;
-    right:16px;
-    bottom:0;
-    height:3px;
-    background:linear-gradient(90deg,{VERDE},{CELESTE},{ROSADO});
-    border-radius:20px 20px 0 0;
-}}
-
-.filter-eyebrow{{
-    position:relative;
-    width:max-content;
-    padding:5px 9px;
-    color:#FFFFFF !important;
-    background:rgba(0,0,0,.25);
-    border:1px solid rgba(255,255,255,.15);
-    border-radius:999px;
-    font-size:10px !important;
-    font-weight:900 !important;
-    letter-spacing:.14em !important;
-    text-transform:uppercase;
-}}
-
-.filter-title{{
-    position:relative;
-    margin-top:12px;
-    color:#FFFFFF !important;
-    font-size:25px !important;
-    font-weight:950 !important;
-    line-height:1.05 !important;
-    letter-spacing:-.35px !important;
-}}
-
-.filter-subtitle{{
-    position:relative;
-    color:#DCE6FF !important;
-    font-size:12px !important;
-    font-weight:750 !important;
-    margin-top:7px !important;
-}}
-
-.filter-status-pill{{
-    display:flex;
-    align-items:center;
-    gap:10px;
-    margin:6px 0 18px 0;
-    padding:11px 12px;
-    background:linear-gradient(90deg,rgba(46,203,242,.13),rgba(255,255,255,.035));
-    border:1px solid rgba(46,203,242,.24);
-    border-radius:13px;
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.08);
-}}
-
-.filter-status-pill svg{{
-    width:19px;
-    height:19px;
-    stroke:{CELESTE};
-    stroke-width:2.4;
-}}
-
-.filter-status-pill b{{
-    display:block;
-    color:#FFFFFF;
-    font-size:12px;
-    font-weight:950;
-    letter-spacing:.08em;
-    text-transform:uppercase;
-}}
-
-.filter-status-pill span{{
-    display:block;
-    color:#90A6C8;
-    font-size:10.5px;
-    font-weight:850;
-    margin-top:2px;
-}}
-
-.filter-stat-row{{
-    position:relative;
-    display:grid !important;
-    grid-template-columns:1fr 1fr;
-    gap:9px !important;
-    margin-top:14px !important;
-}}
-
-.filter-stat{{
-    padding:10px 11px !important;
-    background:rgba(3,7,18,.40) !important;
-    border:1px solid rgba(255,255,255,.14) !important;
-    border-radius:13px !important;
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.08);
-}}
-
-.filter-stat b{{
-    color:#FFFFFF !important;
-    font-size:20px !important;
-    font-weight:950 !important;
-    letter-spacing:-.3px;
-}}
-
-.filter-stat span{{
-    color:#AFC4FF !important;
-    font-size:10px !important;
-    font-weight:900 !important;
-    letter-spacing:.06em;
-    text-transform:uppercase;
-}}
-
-.filter-section-label{{
-    display:flex;
-    align-items:center;
-    gap:10px;
-    margin:17px 0 8px 0;
-    color:#EAF2FF;
-    font-size:11px;
-    font-weight:950;
-    letter-spacing:.13em;
-    text-transform:uppercase;
-}}
-
-.filter-section-label span{{
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    width:24px;
-    height:24px;
-    border-radius:8px;
-    color:#041015;
-    background:linear-gradient(135deg,{VERDE},{CELESTE});
-    box-shadow:0 10px 18px rgba(46,203,242,.18);
-    font-size:11px;
-    letter-spacing:0;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]{{
-    background:rgba(6,9,18,.74) !important;
-    border:1px solid rgba(148,163,184,.20) !important;
-    border-radius:16px !important;
-    box-shadow:
-        0 18px 35px rgba(0,0,0,.30),
-        inset 0 1px 0 rgba(255,255,255,.065);
-    backdrop-filter:blur(18px);
-    margin-bottom:14px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:hover{{
-    border-color:rgba(46,203,242,.48) !important;
-    box-shadow:
-        0 20px 38px rgba(0,0,0,.36),
-        0 0 0 1px rgba(46,203,242,.08),
-        inset 0 1px 0 rgba(255,255,255,.08);
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:hover,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:focus,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:active{{
-    min-height:48px !important;
-    padding:12px 14px !important;
-    background:
-        linear-gradient(90deg,rgba(255,255,255,.075),rgba(255,255,255,.025)) !important;
-    border-bottom:1px solid rgba(148,163,184,.16) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary *{{
-    color:#FFFFFF !important;
-    font-size:15px !important;
-    font-weight:950 !important;
-    letter-spacing:.04em !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] svg{{
-    color:{CELESTE} !important;
-    stroke:{CELESTE} !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpanderContent"]{{
-    background:rgba(3,6,14,.58) !important;
-    padding:12px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stButton"] button{{
-    min-height:32px !important;
-    border-radius:10px !important;
-    background:rgba(255,255,255,.075) !important;
-    border:1px solid rgba(46,203,242,.32) !important;
-    color:#F8FAFC !important;
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.10) !important;
-    font-size:11px !important;
-    font-weight:950 !important;
-    letter-spacing:.04em !important;
-    text-transform:uppercase;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stButton"] button:hover{{
-    background:linear-gradient(135deg,rgba(16,6,159,.72),rgba(0,92,255,.56)) !important;
-    border-color:rgba(71,225,144,.55) !important;
-    transform:translateY(-1px);
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stTextInput"] label p{{
-    color:#BFD2FF !important;
-    font-size:11px !important;
-    font-weight:950 !important;
-    letter-spacing:.04em;
-    text-transform:uppercase;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stTextInput"] input{{
-    min-height:42px !important;
-    border-radius:12px !important;
-    color:#FFFFFF !important;
-    background:
-        linear-gradient(180deg,rgba(15,23,42,.94),rgba(8,12,22,.94)) !important;
-    border:1px solid rgba(46,203,242,.44) !important;
-    box-shadow:
-        inset 0 1px 0 rgba(255,255,255,.08),
-        0 12px 22px rgba(0,0,0,.22) !important;
-    font-weight:850 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stTextInput"] input:focus{{
-    border-color:{VERDE} !important;
-    box-shadow:0 0 0 2px rgba(71,225,144,.16), 0 12px 24px rgba(0,0,0,.28) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]{{
-    position:relative;
-    padding:8px 9px 8px 11px !important;
-    margin:5px 0 !important;
-    background:
-        linear-gradient(90deg,rgba(255,255,255,.075),rgba(255,255,255,.030)) !important;
-    border:1px solid rgba(255,255,255,.075) !important;
-    border-radius:12px !important;
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.05);
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]::before{{
-    content:"";
-    position:absolute;
-    left:0;
-    top:9px;
-    bottom:9px;
-    width:3px;
-    border-radius:0 8px 8px 0;
-    background:linear-gradient(180deg,{CELESTE},{VERDE});
-    opacity:.78;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:hover{{
-    background:
-        linear-gradient(90deg,rgba(46,203,242,.14),rgba(255,255,255,.045)) !important;
-    border-color:rgba(46,203,242,.32) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label p,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label span{{
-    color:#F8FAFC !important;
-    font-size:12.5px !important;
-    font-weight:900 !important;
-    line-height:1.25 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] input[type="checkbox"]{{
-    accent-color:{VERDE} !important;
-}}
-
-.filter-mini-note{{
-    color:#91A6C8 !important;
-    font-size:10.5px !important;
-    font-weight:900 !important;
-    letter-spacing:.05em;
-    text-transform:uppercase;
-    margin:6px 0 10px 1px !important;
-}}
-
-/*======================================================
-SIDEBAR PREMIUM V3 - EXECUTIVE FILTERS
-======================================================*/
-
-.control-glass{{
-    padding:14px 14px 13px 14px !important;
-    background:
-        linear-gradient(135deg,rgba(16,6,159,.50),rgba(0,92,255,.18)),
-        linear-gradient(180deg,rgba(255,255,255,.10),rgba(255,255,255,.035)) !important;
-    border:1px solid rgba(46,203,242,.34) !important;
-    border-radius:14px !important;
-    box-shadow:
-        0 16px 30px rgba(0,0,0,.26),
-        inset 0 1px 0 rgba(255,255,255,.18) !important;
-}}
-
-.control-glass::before{{
-    display:none !important;
-}}
-
-.filter-eyebrow{{
-    padding:0 !important;
-    background:transparent !important;
-    border:0 !important;
-    color:{CELESTE} !important;
-    font-size:10px !important;
-    letter-spacing:.16em !important;
-}}
-
-.filter-title{{
-    margin-top:6px !important;
-    font-size:22px !important;
-    letter-spacing:-.25px !important;
-}}
-
-.filter-subtitle{{
-    margin-top:5px !important;
-    font-size:11px !important;
-    color:#C9D7FF !important;
-}}
-
-.filter-stat-row{{
-    display:none !important;
-}}
-
-.filter-section-label{{
-    display:grid !important;
-    grid-template-columns:38px 1fr !important;
-    align-items:center !important;
-    gap:11px !important;
-    margin:18px 0 9px 0 !important;
-    color:#FFFFFF !important;
-    letter-spacing:0 !important;
-    text-transform:none !important;
-}}
-
-.filter-section-label .filter-icon{{
-    display:flex !important;
-    align-items:center !important;
-    justify-content:center !important;
-    width:38px !important;
-    height:38px !important;
-    border-radius:12px !important;
-    color:#061015 !important;
-    background:linear-gradient(135deg,{VERDE},{CELESTE}) !important;
-    box-shadow:
-        0 12px 22px rgba(46,203,242,.22),
-        inset 0 1px 0 rgba(255,255,255,.40) !important;
-}}
-
-.filter-section-label .filter-icon svg{{
-    width:20px !important;
-    height:20px !important;
-    stroke:#061015 !important;
-    stroke-width:2.6 !important;
-}}
-
-.filter-label-copy b{{
-    display:block;
-    color:#FFFFFF;
-    font-size:13px;
-    font-weight:950;
-    letter-spacing:.07em;
-    text-transform:uppercase;
-    line-height:1.05;
-}}
-
-.filter-label-copy small{{
-    display:block;
-    color:#90A6C8;
-    font-size:10.5px;
-    font-weight:850;
-    margin-top:4px;
-    letter-spacing:.02em;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]{{
-    border-radius:12px !important;
-    margin-bottom:10px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:hover,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:focus,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:active{{
-    min-height:44px !important;
-    padding:11px 13px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary *{{
-    font-size:13px !important;
-    letter-spacing:.03em !important;
-}}
-
-/*======================================================
-SIDEBAR FINAL CLEAN OVERRIDE
-======================================================*/
-
-.filter-status-pill,
-.filter-hero,
-.control-glass{{
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"]{{
-    background:linear-gradient(180deg,#050812 0%,#080B12 58%,#030407 100%) !important;
-    border-right:1px solid rgba(46,203,242,.30) !important;
-    --primary-color:{CELESTE} !important;
-}}
-
-section[data-testid="stSidebar"] > div:first-child{{
-    padding:20px 18px 22px 18px !important;
-}}
-
-.filter-section-label{{
-    grid-template-columns:30px 1fr !important;
-    gap:10px !important;
-    margin:16px 0 7px 0 !important;
-}}
-
-.filter-section-label .filter-icon{{
-    width:30px !important;
-    height:30px !important;
-    border-radius:9px !important;
-    background:linear-gradient(135deg,{CELESTE},{VERDE}) !important;
-    box-shadow:none !important;
-}}
-
-.filter-section-label .filter-icon svg{{
-    width:16px !important;
-    height:16px !important;
-}}
-
-.filter-label-copy b{{
-    font-size:12px !important;
-    letter-spacing:.08em !important;
-}}
-
-.filter-label-copy small{{
-    font-size:10px !important;
-    color:#8EA0BD !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]{{
-    background:rgba(12,16,25,.88) !important;
-    border:1px solid rgba(148,163,184,.24) !important;
-    border-radius:10px !important;
-    box-shadow:none !important;
-    margin-bottom:15px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:hover,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:focus,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:active{{
-    min-height:42px !important;
-    padding:10px 12px !important;
-    background:rgba(255,255,255,.025) !important;
-    border-bottom:1px solid rgba(148,163,184,.18) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary *{{
-    color:#F8FAFC !important;
-    font-size:12px !important;
-    font-weight:850 !important;
-    letter-spacing:.02em !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpanderContent"]{{
-    background:#070A11 !important;
-    padding:12px 12px 14px 12px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stButton"] button{{
-    min-height:31px !important;
-    border-radius:8px !important;
-    background:#111827 !important;
-    border:1px solid rgba(46,203,242,.35) !important;
-    color:#EAF2FF !important;
-    box-shadow:none !important;
-    font-size:11px !important;
-    font-weight:850 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stButton"] button:hover{{
-    background:#142033 !important;
-    border-color:{CELESTE} !important;
-    transform:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stTextInput"] input{{
-    background:#0B1220 !important;
-    border:1px solid rgba(46,203,242,.38) !important;
-    box-shadow:none !important;
-    border-radius:9px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]{{
-    background:transparent !important;
-    border:0 !important;
-    border-radius:0 !important;
-    box-shadow:none !important;
-    margin:2px 0 !important;
-    padding:3px 0 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]::before{{
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:hover{{
-    background:transparent !important;
-    border-color:transparent !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label p,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label span,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label div{{
-    background:transparent !important;
-    box-shadow:none !important;
-    color:#F8FAFC !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label p{{
-    font-size:12px !important;
-    font-weight:750 !important;
-    line-height:1.25 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] input[type="checkbox"]{{
-    accent-color:{CELESTE} !important;
-}}
-
-.filter-mini-note{{
-    color:#8EA0BD !important;
-    font-size:10px !important;
-    margin:6px 0 8px 0 !important;
-}}
-
-/*======================================================
-SIDEBAR FUTURISTA EJECUTIVO - FINAL
-======================================================*/
-
-section[data-testid="stSidebar"]{{
-    background:
-        linear-gradient(180deg,rgba(5,9,20,.98) 0%,rgba(6,11,19,.98) 54%,rgba(3,5,10,1) 100%),
-        radial-gradient(circle at 85% 8%,rgba(46,203,242,.16),transparent 30%) !important;
-    border-right:1px solid rgba(46,203,242,.28) !important;
-    box-shadow:18px 0 38px rgba(2,6,23,.22);
-    --primary-color:{CELESTE} !important;
-}}
-
-section[data-testid="stSidebar"]::before{{
-    content:"";
-    position:absolute;
-    inset:0;
-    pointer-events:none;
-    background:
-        linear-gradient(rgba(255,255,255,.028) 1px,transparent 1px),
-        linear-gradient(90deg,rgba(255,255,255,.020) 1px,transparent 1px);
-    background-size:28px 28px;
-    mask-image:linear-gradient(180deg,rgba(0,0,0,.70),rgba(0,0,0,.16));
-}}
-
-section[data-testid="stSidebar"] img{{
-    background:transparent !important;
-    box-shadow:none !important;
-    border-radius:0 !important;
-    margin-bottom:14px !important;
-}}
-
-.filter-section-label{{
-    position:relative;
-    grid-template-columns:32px 1fr !important;
-    gap:11px !important;
-    margin:18px 0 8px 0 !important;
-    padding-left:1px !important;
-}}
-
-.filter-section-label .filter-icon{{
-    width:32px !important;
-    height:32px !important;
-    border-radius:10px !important;
-    background:
-        linear-gradient(145deg,rgba(46,203,242,.95),rgba(71,225,144,.82)) !important;
-    box-shadow:
-        0 8px 18px rgba(46,203,242,.13),
-        inset 0 1px 0 rgba(255,255,255,.44) !important;
-}}
-
-.filter-label-copy b{{
-    color:#F8FAFC !important;
-    font-size:12px !important;
-    font-weight:900 !important;
-    letter-spacing:.09em !important;
-}}
-
-.filter-label-copy small{{
-    color:#9AAECF !important;
-    font-size:10px !important;
-    font-weight:800 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]{{
-    position:relative;
-    overflow:hidden;
-    background:linear-gradient(180deg,rgba(13,18,29,.86),rgba(8,12,20,.92)) !important;
-    border:1px solid rgba(148,163,184,.22) !important;
-    border-radius:12px !important;
-    box-shadow:
-        0 10px 24px rgba(0,0,0,.20),
-        inset 0 1px 0 rgba(255,255,255,.045) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]::before{{
-    content:"";
-    position:absolute;
-    left:0;
-    top:0;
-    bottom:0;
-    width:3px;
-    background:rgba(148,163,184,.24);
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input:checked){{
-    background:
-        linear-gradient(180deg,rgba(13,28,43,.96),rgba(8,17,29,.96)) !important;
-    border-color:rgba(46,203,242,.42) !important;
-    box-shadow:
-        0 14px 28px rgba(2,6,23,.30),
-        inset 0 1px 0 rgba(255,255,255,.075),
-        inset 0 0 0 1px rgba(46,203,242,.055) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input:checked)::before{{
-    background:linear-gradient(180deg,{CELESTE},{VERDE});
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(details[open]){{
-    border-color:rgba(71,225,144,.42) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:hover,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:focus,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:active{{
-    background:rgba(255,255,255,.018) !important;
-    border-bottom:1px solid rgba(148,163,184,.14) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input:checked) details summary{{
-    background:linear-gradient(90deg,rgba(46,203,242,.105),rgba(255,255,255,.020)) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpanderContent"]{{
-    background:linear-gradient(180deg,rgba(5,9,16,.72),rgba(4,7,12,.88)) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stButton"] button{{
-    background:linear-gradient(180deg,rgba(16,24,39,.96),rgba(10,15,25,.98)) !important;
-    border:1px solid rgba(46,203,242,.34) !important;
-    color:#EAF6FF !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stButton"] button:hover{{
-    background:linear-gradient(180deg,rgba(18,32,48,.98),rgba(12,20,33,.98)) !important;
-    border-color:rgba(71,225,144,.46) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]{{
-    padding:6px 8px !important;
-    margin:4px 0 !important;
-    border-radius:9px !important;
-    background:rgba(12,18,29,.72) !important;
-    border:1px solid rgba(148,163,184,.18) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:has(input:checked){{
-    background:
-        linear-gradient(90deg,rgba(46,203,242,.38),rgba(71,225,144,.24)) !important;
-    border:1px solid rgba(46,203,242,.55) !important;
-    box-shadow:
-        inset 3px 0 0 {CELESTE},
-        inset 0 1px 0 rgba(255,255,255,.10),
-        0 8px 18px rgba(2,6,23,.18) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] input[type="checkbox"]{{
-    accent-color:{CELESTE} !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label p{{
-    color:#F5F8FF !important;
-    font-size:12px !important;
-    font-weight:760 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:has(input:checked) label p{{
-    color:#FFFFFF !important;
-    font-weight:900 !important;
-}}
-
-/*======================================================
-DASHBOARD FUTURISTA RESPONSIVO - FINAL
-======================================================*/
-
-.block-container{{
-    max-width:100% !important;
-    padding-top:1.0rem !important;
-    padding-left:1.35rem !important;
-    padding-right:1.35rem !important;
-    padding-bottom:.8rem !important;
-}}
-
-.stApp{{
-    background:
-        radial-gradient(circle at 88% 4%,rgba(46,203,242,.16),transparent 28%),
-        radial-gradient(circle at 20% 0%,rgba(16,6,159,.08),transparent 32%),
-        linear-gradient(180deg,#FBFCFF 0%,#F3F7FC 100%) !important;
-}}
-
-.titulo{{
-    font-size:clamp(34px,3.1vw,48px) !important;
-    line-height:.98 !important;
-    letter-spacing:-1px !important;
-    margin-bottom:4px !important;
-}}
-
-.subtitulo{{
-    font-size:clamp(13px,1vw,16px) !important;
-    margin-top:5px !important;
-}}
-
-.linea-titulo{{
-    width:clamp(140px,13vw,210px) !important;
-    height:4px !important;
-    margin-top:10px !important;
-    margin-bottom:10px !important;
-}}
-
-.kpi-title{{
-    font-size:clamp(20px,1.55vw,25px) !important;
-    margin-top:16px !important;
-    margin-bottom:8px !important;
-}}
-
-.kpi-divider{{
-    height:3px !important;
-    margin-bottom:16px !important;
-}}
-
-div[data-testid="stPlotlyChart"]{{
-    min-width:0 !important;
-    border-radius:10px !important;
-    overflow:hidden !important;
-}}
-
-div[data-testid="column"],
-div[data-testid="stVerticalBlock"],
-div[data-testid="element-container"]{{
-    min-width:0 !important;
-}}
-
-img{{
-    max-width:100% !important;
-    height:auto !important;
-}}
-
-.main .block-container{{
-    overflow-x:hidden !important;
-}}
-
-div[data-testid="stHorizontalBlock"]{{
-    gap:.75rem !important;
-}}
-
-@media (max-width: 1250px){{
-    .block-container{{
-        padding-left:.85rem !important;
-        padding-right:.85rem !important;
-    }}
-
-    div[data-testid="stHorizontalBlock"]{{
-        gap:.45rem !important;
-    }}
-}}
-
-@media (max-width: 900px){{
-    .titulo{{
-        font-size:34px !important;
-    }}
-
-    .subtitulo{{
-        font-size:13px !important;
-    }}
-}}
-
-div[data-testid="stPlotlyChart"],
-div[data-testid="stPlotlyChart"] > div,
-.js-plotly-plot,
-.js-plotly-plot .plotly,
-.js-plotly-plot .main-svg{{
-    overflow:visible !important;
-}}
-
-@media (max-width: 1180px){{
-    .disp-kpi-grid{{
-        grid-template-columns:repeat(2,minmax(0,1fr)) !important;
-    }}
-
-    .disp-kpi-card{{
-        min-height:132px !important;
-        height:auto !important;
-    }}
-
-    div[data-testid="stHorizontalBlock"]{{
-        flex-wrap:wrap !important;
-    }}
-
-    div[data-testid="stHorizontalBlock"] > div[data-testid="column"]{{
-        flex:1 1 360px !important;
-        min-width:min(100%,360px) !important;
-    }}
-}}
-
-@media (max-width: 760px){{
-    .block-container{{
-        padding-left:.55rem !important;
-        padding-right:.55rem !important;
-    }}
-
-    .disp-kpi-grid,
-    .ai-insight-grid{{
-        grid-template-columns:1fr !important;
-    }}
-
-    div[data-testid="stHorizontalBlock"] > div[data-testid="column"]{{
-        flex:1 1 100% !important;
-        min-width:100% !important;
-    }}
-
-    .disp-kpi-card{{
-        padding-left:58px !important;
-    }}
-}}
-
-/*======================================================
-INTERACCION FINAL: SELECCION + SIDEBAR RAIL
-======================================================*/
-
-.block-container{{
-    padding-top:.85rem !important;
-}}
-
-.titulo{{
-    font-size:clamp(34px,2.75vw,44px) !important;
-    line-height:1.12 !important;
-    padding-top:0 !important;
-    overflow:visible !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]{{
-    min-height:34px !important;
-    display:flex !important;
-    align-items:center !important;
-    border:1px solid rgba(148,163,184,.18) !important;
-    background:rgba(10,15,25,.58) !important;
-    transition:background .18s ease,border-color .18s ease,box-shadow .18s ease;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:has(input:checked){{
-    background:
-        linear-gradient(90deg,rgba(46,203,242,.34),rgba(71,225,144,.20)) !important;
-    border-color:rgba(46,203,242,.62) !important;
-    box-shadow:
-        inset 3px 0 0 {CELESTE},
-        inset 0 0 0 1px rgba(255,255,255,.045),
-        0 10px 22px rgba(2,6,23,.18) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:not(:has(input:checked)){{
-    background:rgba(10,15,25,.58) !important;
-    border-color:rgba(148,163,184,.16) !important;
-    box-shadow:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] input[type="checkbox"]{{
-    width:14px !important;
-    height:14px !important;
-    accent-color:{CELESTE} !important;
-    filter:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] input[type="checkbox"]:checked{{
-    accent-color:{VERDE} !important;
-    filter:drop-shadow(0 0 5px rgba(46,203,242,.62)) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label p{{
-    color:#DDE7F7 !important;
-    font-size:12px !important;
-    font-weight:760 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:has(input:checked) label p{{
-    color:#FFFFFF !important;
-    font-weight:900 !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"]{{
-    min-width:86px !important;
-    max-width:86px !important;
-    width:86px !important;
-    transform:translateX(0) !important;
-    visibility:visible !important;
-    overflow:hidden !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] > div:first-child{{
-    width:86px !important;
-    padding:16px 11px !important;
-    overflow:hidden !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] img{{
-    content:url("{LOGO_ECC_ICONO_DATA}") !important;
-    width:58px !important;
-    min-width:58px !important;
-    max-width:58px !important;
-    margin:8px auto 28px auto !important;
-    display:block !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] .filter-section-label{{
-    display:grid !important;
-    grid-template-columns:1fr !important;
-    justify-items:center !important;
-    margin:24px 0 !important;
-    padding:0 !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] .filter-section-label .filter-icon{{
-    width:42px !important;
-    height:42px !important;
-    border-radius:13px !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] .filter-label-copy,
-section[data-testid="stSidebar"][aria-expanded="false"] div[data-testid="stExpander"],
-section[data-testid="stSidebar"][aria-expanded="false"] .filter-mini-note{{
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] ~ div .block-container,
-section[data-testid="stSidebar"][aria-expanded="false"] + div .block-container{{
-    padding-left:1rem !important;
-    padding-right:1rem !important;
-    max-width:100% !important;
-}}
-
-/*======================================================
-ICONOS NEON PARA FILTROS SELECCIONABLES
-======================================================*/
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label{{
-    display:flex !important;
-    align-items:center !important;
-    gap:9px !important;
-    width:100% !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label > div:first-child,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label > span:first-child{{
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] input[type="checkbox"]{{
-    position:absolute !important;
-    opacity:0 !important;
-    width:1px !important;
-    height:1px !important;
-    pointer-events:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label::before{{
-    content:"";
-    flex:0 0 22px;
-    width:22px;
-    height:22px;
-    border-radius:8px;
-    border:1px solid rgba(46,203,242,.34);
-    background-color:rgba(3,9,18,.78);
-    background-repeat:no-repeat;
-    background-position:center;
-    background-size:14px 14px;
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232ECBF2' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='7.5' r='3.2'/%3E%3Cpath d='M5.5 20c.8-4.4 3.2-6.5 6.5-6.5s5.7 2.1 6.5 6.5'/%3E%3C/svg%3E");
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.08);
-    opacity:.62;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input[aria-label="Ene"]) div[data-testid="stCheckbox"] label::before,
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input[aria-label="Feb"]) div[data-testid="stCheckbox"] label::before{{
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232ECBF2' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 3v3M17 3v3M4.5 9h15'/%3E%3Crect x='4' y='5' width='16' height='16' rx='2.5'/%3E%3Cpath d='M8 13h3M13 13h3M8 17h3'/%3E%3C/svg%3E") !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input[aria-label*="CLAUDIO"]) div[data-testid="stCheckbox"] label::before,
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input[aria-label*="CRISTOFER"]) div[data-testid="stCheckbox"] label::before,
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input[aria-label*="CHRISTOPHER"]) div[data-testid="stCheckbox"] label::before,
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input[aria-label*="ELIET"]) div[data-testid="stCheckbox"] label::before,
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input[aria-label*="LUIS"]) div[data-testid="stCheckbox"] label::before,
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input[aria-label*="MATIAS"]) div[data-testid="stCheckbox"] label::before,
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input[aria-label*="OSTION"]) div[data-testid="stCheckbox"] label::before,
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input[aria-label*="PABLO"]) div[data-testid="stCheckbox"] label::before,
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input[aria-label*="PEDRO"]) div[data-testid="stCheckbox"] label::before{{
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232ECBF2' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='7.5' r='3.2'/%3E%3Cpath d='M5.5 20c.8-4.4 3.2-6.5 6.5-6.5s5.7 2.1 6.5 6.5'/%3E%3C/svg%3E") !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label*="Region"])::before,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label*="Región"])::before{{
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232ECBF2' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 21s7-5.4 7-12a7 7 0 1 0-14 0c0 6.6 7 12 7 12Z'/%3E%3Ccircle cx='12' cy='9' r='2.5'/%3E%3C/svg%3E");
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="Ene"])::before,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="Feb"])::before,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="Mar"])::before,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="Abr"])::before,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="May"])::before,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="Jun"])::before,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="Jul"])::before,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="Ago"])::before,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="Sep"])::before,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="Oct"])::before,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="Nov"])::before,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="Dic"])::before{{
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232ECBF2' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 3v3M17 3v3M4.5 9h15'/%3E%3Crect x='4' y='5' width='16' height='16' rx='2.5'/%3E%3Cpath d='M8 13h3M13 13h3M8 17h3'/%3E%3C/svg%3E");
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:has(input:checked) label::before{{
-    border-color:rgba(71,225,144,.95);
-    background-color:rgba(46,203,242,.14);
-    box-shadow:
-        0 0 0 1px rgba(46,203,242,.26),
-        0 0 14px rgba(46,203,242,.40),
-        inset 0 0 12px rgba(71,225,144,.14);
-    opacity:1;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:not(:has(input:checked)) label::before{{
-    border-color:rgba(148,163,184,.36);
-    background-color:rgba(3,9,18,.72);
-    filter:grayscale(.25);
-    opacity:.54;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:has(input:checked){{
-    background:
-        linear-gradient(90deg,rgba(46,203,242,.22),rgba(71,225,144,.13)) !important;
-    border-color:rgba(46,203,242,.46) !important;
-}}
-
-/*======================================================
-FIX FINAL SUPERIOR: SIN FRANJA BLANCA Y SIN TITULO CORTADO
-======================================================*/
-
-header[data-testid="stHeader"]{{
-    display:none !important;
-    height:0 !important;
-    min-height:0 !important;
-    visibility:hidden !important;
-}}
-
-div[data-testid="stToolbar"],
-div[data-testid="stDecoration"],
-.stDeployButton,
-#MainMenu,
-footer{{
-    display:none !important;
-    height:0 !important;
-    visibility:hidden !important;
-}}
-
-section.main,
-div[data-testid="stAppViewContainer"] > .main{{
-    padding-top:0 !important;
-}}
-
-.block-container{{
-    padding-top:1.05rem !important;
-}}
-
-.titulo{{
-    margin-top:0 !important;
-    padding-top:0 !important;
-    line-height:1.16 !important;
-    font-size:clamp(32px,2.55vw,42px) !important;
-    overflow:visible !important;
-}}
-
-.subtitulo{{
-    margin-top:4px !important;
-}}
-
-section[data-testid="stSidebar"] > div:first-child{{
-    padding-top:16px !important;
-}}
-
-section[data-testid="stSidebar"] img{{
-    width:220px !important;
-    margin-top:-10px !important;
-    margin-bottom:20px !important;
-    margin-left:auto !important;
-    margin-right:auto !important;
-    display:block !important;
-}}
-
-/*======================================================
-PROFUNDIDAD 3D EJECUTIVA GLOBAL
-======================================================*/
-
-div[data-testid="stPlotlyChart"]{{
-    background:linear-gradient(180deg,rgba(255,255,255,.98),rgba(248,251,255,.98)) !important;
-    border:1px solid rgba(16,6,159,.08) !important;
-    box-shadow:
-        0 18px 36px rgba(15,23,42,.10),
-        0 5px 0 rgba(15,23,42,.055),
-        inset 0 1px 0 rgba(255,255,255,.92) !important;
-}}
-
-div[data-testid="stPlotlyChart"]:hover{{
-    box-shadow:
-        0 22px 42px rgba(15,23,42,.13),
-        0 5px 0 rgba(15,23,42,.065),
-        inset 0 1px 0 rgba(255,255,255,.95) !important;
-}}
-
-div[data-testid="stMarkdownContainer"] > div[style*="border-top"]{{
-    box-shadow:
-        0 16px 34px rgba(15,23,42,.10),
-        0 5px 0 rgba(16,6,159,.10),
-        inset 0 1px 0 rgba(255,255,255,.90) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]{{
-    box-shadow:
-        0 16px 30px rgba(0,0,0,.30),
-        0 4px 0 rgba(0,0,0,.26),
-        inset 0 1px 0 rgba(255,255,255,.07) !important;
-}}
-
-section[data-testid="stSidebar"] .filter-section-label{{
-    filter:drop-shadow(0 12px 18px rgba(0,0,0,.22));
-}}
-
-section[data-testid="stSidebar"] .filter-section-label .filter-icon{{
-    box-shadow:
-        0 14px 26px rgba(46,203,242,.22),
-        0 4px 0 rgba(0,0,0,.20),
-        inset 0 1px 0 rgba(255,255,255,.52),
-        inset 0 -8px 14px rgba(2,6,23,.12) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]{{
-    box-shadow:
-        0 10px 20px rgba(0,0,0,.18),
-        0 3px 0 rgba(0,0,0,.18),
-        inset 0 1px 0 rgba(255,255,255,.055) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:has(input:checked){{
-    box-shadow:
-        inset 3px 0 0 {CELESTE},
-        inset 0 1px 0 rgba(255,255,255,.12),
-        0 16px 28px rgba(2,6,23,.26),
-        0 0 0 1px rgba(46,203,242,.22) !important;
-}}
-
-/*======================================================
-AJUSTE FINAL: SIDEBAR MAS FINA + LOGO 3D
-======================================================*/
-
-section[data-testid="stSidebar"]{{
-    min-width:286px !important;
-    max-width:286px !important;
-    width:286px !important;
-}}
-
-section[data-testid="stSidebar"] > div:first-child{{
-    width:286px !important;
-    padding-top:14px !important;
-    padding-left:18px !important;
-    padding-right:18px !important;
-}}
-
-section[data-testid="stSidebar"] img{{
-    width:198px !important;
-    max-width:198px !important;
-    margin-top:-8px !important;
-    margin-bottom:18px !important;
-    transform:perspective(820px) rotateX(5deg) translateZ(0);
-    filter:
-        drop-shadow(0 13px 10px rgba(0,0,0,.42))
-        drop-shadow(0 0 12px rgba(46,203,242,.16))
-        drop-shadow(2px 2px 0 rgba(46,203,242,.18))
-        drop-shadow(-1px -1px 0 rgba(255,255,255,.20)) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]{{
-    border-radius:11px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label p{{
-    font-size:11.5px !important;
-    line-height:1.15 !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"]{{
-    min-width:76px !important;
-    max-width:76px !important;
-    width:76px !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] > div:first-child{{
-    width:76px !important;
-    padding-left:9px !important;
-    padding-right:9px !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] img{{
-    width:50px !important;
-    min-width:50px !important;
-    max-width:50px !important;
-    margin:6px auto 26px auto !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] .filter-section-label .filter-icon{{
-    width:38px !important;
-    height:38px !important;
-}}
-
-/*======================================================
-PULIDO EJECUTIVO FINAL: LOGOS, MESES, EXPORTACION
-======================================================*/
-
-button[title*="fullscreen" i],
-button[aria-label*="fullscreen" i],
-button[title*="pantalla completa" i],
-button[aria-label*="pantalla completa" i],
-div[data-testid="StyledFullScreenButton"],
-div[data-testid="stElementToolbar"]{{
-    display:none !important;
-    opacity:0 !important;
-    pointer-events:none !important;
-}}
-
-button[data-testid="stSidebarCollapseButton"],
-div[data-testid="stSidebarCollapseButton"] button,
-button[title*="sidebar" i],
-button[aria-label*="sidebar" i],
-button[title*="barra" i],
-button[aria-label*="barra" i]{{
-    background:
-        radial-gradient(circle at 35% 25%,rgba(255,255,255,.46),transparent 25%),
-        linear-gradient(135deg,{NARANJO} 0%,{ROSADO} 100%) !important;
-    color:#FFFFFF !important;
-    border:1px solid rgba(255,61,0,.72) !important;
-    border-radius:12px !important;
-    box-shadow:
-        0 0 0 1px rgba(255,61,0,.22),
-        0 0 18px rgba(255,61,0,.42),
-        0 12px 24px rgba(2,6,23,.24) !important;
-}}
-
-.sidebar-logo-shell{{
-    display:flex;
-    justify-content:center;
-    align-items:center;
-    margin:-4px auto 18px auto;
-    user-select:none;
-    pointer-events:none;
-}}
-
-section[data-testid="stSidebar"] .sidebar-logo-img{{
-    width:188px !important;
-    max-width:188px !important;
-    height:auto !important;
-    transform:none !important;
-    opacity:.98;
-    filter:
-        drop-shadow(0 11px 14px rgba(0,0,0,.46))
-        drop-shadow(0 0 10px rgba(46,203,242,.13))
-        drop-shadow(1px 1px 0 rgba(255,255,255,.18)) !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] .sidebar-logo-img{{
-    content:url("{LOGO_ECC_ICONO_DATA}") !important;
-    width:48px !important;
-    min-width:48px !important;
-    max-width:48px !important;
-    margin:4px auto 24px auto !important;
-}}
-
-.brand-lockup{{
-    height:58px;
-    display:flex;
-    align-items:flex-start;
-    justify-content:flex-end;
-    pointer-events:none;
-    user-select:none;
-}}
-
-.brand-lockup img{{
-    width:118px;
-    height:auto;
-    filter:
-        drop-shadow(0 8px 13px rgba(16,6,159,.14))
-        drop-shadow(0 0 8px rgba(46,203,242,.10));
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input[aria-label="Ene"]) div[data-testid="stCheckbox"]{{
-    padding:2px 0 !important;
-    margin:3px 0 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input[aria-label="Ene"]) div[data-testid="stCheckbox"] label{{
-    min-height:32px !important;
-    height:32px !important;
-    padding:0 7px !important;
-    gap:6px !important;
-    border-radius:10px !important;
-    border:1px solid rgba(46,203,242,.24) !important;
-    background:linear-gradient(180deg,rgba(13,22,36,.92),rgba(7,13,23,.96)) !important;
-    box-shadow:
-        0 9px 18px rgba(0,0,0,.20),
-        inset 0 1px 0 rgba(255,255,255,.055) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input[aria-label="Ene"]) div[data-testid="stCheckbox"]:has(input:checked) label{{
-    background:
-        linear-gradient(135deg,rgba(46,203,242,.30),rgba(253,108,152,.16)) !important;
-    border-color:rgba(46,203,242,.72) !important;
-    box-shadow:
-        inset 3px 0 0 {NARANJO},
-        0 0 0 1px rgba(46,203,242,.18),
-        0 0 18px rgba(46,203,242,.18),
-        0 12px 22px rgba(0,0,0,.24) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input[aria-label="Ene"]) div[data-testid="stCheckbox"] label::before{{
-    flex:0 0 18px !important;
-    width:18px !important;
-    height:18px !important;
-    border-radius:6px !important;
-    background-size:12px 12px !important;
-    border-color:rgba(46,203,242,.42) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input[aria-label="Ene"]) div[data-testid="stCheckbox"]:has(input:checked) label::before{{
-    border-color:{NARANJO} !important;
-    background-color:rgba(255,61,0,.16) !important;
-    box-shadow:
-        0 0 0 1px rgba(255,61,0,.22),
-        0 0 13px rgba(255,61,0,.42),
-        inset 0 1px 0 rgba(255,255,255,.20) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(input[aria-label="Ene"]) div[data-testid="stCheckbox"] label p{{
-    min-width:0 !important;
-    max-width:68px !important;
-    overflow:hidden !important;
-    text-overflow:ellipsis !important;
-    white-space:nowrap !important;
-    font-size:10.5px !important;
-    line-height:1 !important;
-    letter-spacing:0 !important;
-}}
-
-.sidebar-export-card{{
-    position:fixed !important;
-    left:18px !important;
-    bottom:58px !important;
-    width:230px !important;
-    margin:0 !important;
-    padding:14px 15px;
-    border-radius:14px;
-    border:1px solid rgba(253,108,152,.66);
-    display:flex;
-    align-items:center;
-    gap:12px;
-    text-decoration:none !important;
-    cursor:pointer;
-    color:#FFFFFF !important;
-    z-index:999998 !important;
-    background:
-        radial-gradient(circle at 82% 18%,rgba(253,108,152,.46),transparent 36%),
-        radial-gradient(circle at 16% 86%,rgba(46,203,242,.16),transparent 34%),
-        linear-gradient(145deg,rgba(253,108,152,.22),rgba(18,8,32,.96) 62%,rgba(5,10,20,.98));
-    box-shadow:
-        0 0 18px rgba(253,108,152,.22),
-        0 16px 30px rgba(0,0,0,.30),
-        inset 0 1px 0 rgba(255,255,255,.10);
-    transition:filter .16s ease, border-color .16s ease, box-shadow .16s ease;
-}}
-
-@keyframes exportModeGlow {{
-    0% {{ opacity:.82; filter:brightness(.92) saturate(.95); }}
-    45% {{ opacity:1; filter:brightness(1.22) saturate(1.18); }}
-    100% {{ opacity:1; filter:brightness(1) saturate(1); }}
-}}
-
-@keyframes exportFlowIn {{
-    0% {{ opacity:.76; transform:translateY(-12px); filter:brightness(.92); }}
-    100% {{ opacity:1; transform:translateY(0); filter:brightness(1); }}
-}}
-
-@keyframes clientFilterIn {{
-    0% {{ transform:translateX(-18px); opacity:0; filter:blur(3px) brightness(.9); }}
-    100% {{ transform:translateX(0); opacity:1; filter:blur(0) brightness(1); }}
-}}
-
-@keyframes clientFilterOut {{
-    0% {{ max-height:48px; margin:8px 0 10px; opacity:1; transform:translateX(0); }}
-    100% {{ max-height:0; margin:0; opacity:0; transform:translateX(-18px); padding-top:0; padding-bottom:0; border-color:transparent; }}
-}}
-
-.sidebar-export-card-animate{{
-    animation:exportModeGlow .46s ease-out both;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details:has(.filter-anchor-client){{
-    animation:clientFilterIn .46s ease-out both;
-    transform-origin:top center;
-}}
-
-.client-filter-exit-shell{{
-    overflow:hidden;
-    height:44px;
-    margin:8px 0 10px;
-    padding:0 14px;
-    border-radius:10px;
-    border:1px solid rgba(46,203,242,.34);
-    color:#CFF8FF;
-    display:flex;
-    align-items:center;
-    font-size:12px;
-    font-weight:900;
-    letter-spacing:.06em;
-    background:rgba(6,18,34,.68);
-    box-shadow:0 0 14px rgba(46,203,242,.12), inset 0 1px 0 rgba(255,255,255,.08);
-    animation:clientFilterOut .44s ease-in forwards;
-}}
-
-.sidebar-export-card:hover{{
-    border-color:rgba(253,108,152,.90);
-    filter:brightness(1.07);
-    box-shadow:
-        0 0 22px rgba(253,108,152,.34),
-        0 0 28px rgba(46,203,242,.12),
-        0 18px 32px rgba(0,0,0,.32),
-        inset 0 1px 0 rgba(255,255,255,.14);
-}}
-
-.sidebar-export-icon{{
-    width:36px;
-    height:36px;
-    min-width:36px;
-    border-radius:12px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    color:{ROSADO};
-    border:1px solid rgba(253,108,152,.58);
-    background:
-        radial-gradient(circle at 50% 30%,rgba(253,108,152,.30),transparent 42%),
-        rgba(253,108,152,.10);
-    box-shadow:
-        0 0 12px rgba(253,108,152,.38),
-        0 0 20px rgba(46,203,242,.14),
-        inset 0 1px 0 rgba(255,255,255,.16);
-}}
-
-.sidebar-export-icon svg{{
-    width:21px;
-    height:21px;
-    stroke:currentColor;
-    filter:
-        drop-shadow(0 0 5px rgba(253,108,152,.62))
-        drop-shadow(0 0 8px rgba(46,203,242,.26));
-}}
-
-.sidebar-export-text{{
-    display:flex;
-    flex-direction:column;
-    gap:3px;
-}}
-
-.sidebar-export-kicker{{
-    color:{ROSADO};
-    font-size:9.5px;
-    font-weight:900;
-    text-transform:uppercase;
-    letter-spacing:.12em;
-    text-shadow:0 0 10px rgba(253,108,152,.42);
-}}
-
-.sidebar-export-title{{
-    color:#FFFFFF;
-    font-size:15px;
-    font-weight:950;
-    margin-top:3px;
-    line-height:1.08;
-}}
-
-.sidebar-export-copy{{
-    display:none;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] button{{
-    min-height:36px !important;
-    border-radius:11px !important;
-    border:1px solid rgba(253,108,152,.72) !important;
-    background:
-        linear-gradient(135deg,rgba(253,108,152,.98) 0%,rgba(255,61,0,.92) 58%,rgba(46,203,242,.60) 130%) !important;
-    color:#FFFFFF !important;
-    font-size:11px !important;
-    font-weight:950 !important;
-    letter-spacing:.04em !important;
-    box-shadow:
-        0 0 0 1px rgba(253,108,152,.18),
-        0 0 18px rgba(253,108,152,.36),
-        0 12px 24px rgba(0,0,0,.28) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stDownloadButton"]{{
-    position:fixed !important;
-    left:18px !important;
-    bottom:58px !important;
-    width:230px !important;
-    z-index:999998 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] button:hover{{
-    filter:brightness(1.08);
-    transform:none !important;
-}}
-
-section[data-testid="stSidebar"]:has(.filter-anchor-client) .sidebar-export-card{{
-    position:fixed !important;
-    left:18px !important;
-    bottom:18px !important;
-    width:230px !important;
-    margin:0 !important;
-}}
-
-section[data-testid="stSidebar"]:has(details[open]) .sidebar-export-card,
-section[data-testid="stSidebar"]:has(.filter-anchor-client):has(details[open]) .sidebar-export-card{{
-    position:relative !important;
-    left:auto !important;
-    bottom:auto !important;
-    width:230px !important;
-    margin:18px 0 34px 0 !important;
-    z-index:5 !important;
-    animation:exportFlowIn .36s ease-out both;
-}}
-
-section[data-testid="stSidebar"]:has(.filter-anchor-client) div[data-testid="stDownloadButton"]{{
-    position:fixed !important;
-    left:18px !important;
-    bottom:18px !important;
-    width:230px !important;
-    z-index:999998 !important;
-}}
-
-section[data-testid="stSidebar"]:has(details[open]) div[data-testid="stDownloadButton"],
-section[data-testid="stSidebar"]:has(.filter-anchor-client):has(details[open]) div[data-testid="stDownloadButton"]{{
-    position:relative !important;
-    left:auto !important;
-    bottom:auto !important;
-    width:230px !important;
-    margin:18px 0 34px 0 !important;
-    z-index:5 !important;
-    animation:exportFlowIn .36s ease-out both;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] .sidebar-export-card,
-section[data-testid="stSidebar"][aria-expanded="false"] div[data-testid="stDownloadButton"],
-section[data-testid="stSidebar"][aria-expanded="false"] div[data-testid="stDownloadButton"] *,
-section[data-testid="stSidebar"][aria-expanded="false"] div:has(> div[data-testid="stDownloadButton"]){{
-    display:none !important;
-    visibility:hidden !important;
-    opacity:0 !important;
-    width:0 !important;
-    height:0 !important;
-    min-height:0 !important;
-    margin:0 !important;
-    padding:0 !important;
-    overflow:hidden !important;
-    pointer-events:none !important;
-}}
-
-button[data-testid="stSidebarCollapseButton"],
-div[data-testid="stSidebarCollapseButton"] button,
-section[data-testid="stSidebar"] button[title*="sidebar" i],
-section[data-testid="stSidebar"] button[aria-label*="sidebar" i],
-section[data-testid="stSidebar"] button[title*="barra" i],
-section[data-testid="stSidebar"] button[aria-label*="barra" i]{{
-    position:fixed !important;
-    left:246px !important;
-    bottom:18px !important;
-    top:auto !important;
-    width:34px !important;
-    height:34px !important;
-    padding:0 !important;
-    background:transparent !important;
-    border:0 !important;
-    border-radius:0 !important;
-    box-shadow:none !important;
-    color:{NARANJO} !important;
-    z-index:999999 !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] button[data-testid="stSidebarCollapseButton"],
-section[data-testid="stSidebar"][aria-expanded="false"] div[data-testid="stSidebarCollapseButton"] button,
-section[data-testid="stSidebar"][aria-expanded="false"] button[title*="sidebar" i],
-section[data-testid="stSidebar"][aria-expanded="false"] button[aria-label*="sidebar" i],
-section[data-testid="stSidebar"][aria-expanded="false"] button[title*="barra" i],
-section[data-testid="stSidebar"][aria-expanded="false"] button[aria-label*="barra" i]{{
-    left:23px !important;
-}}
-
-button[data-testid="stSidebarCollapseButton"] svg,
-div[data-testid="stSidebarCollapseButton"] button svg,
-section[data-testid="stSidebar"] button[title*="sidebar" i] svg,
-section[data-testid="stSidebar"] button[aria-label*="sidebar" i] svg,
-section[data-testid="stSidebar"] button[title*="barra" i] svg,
-section[data-testid="stSidebar"] button[aria-label*="barra" i] svg{{
-    width:24px !important;
-    height:24px !important;
-    color:{NARANJO} !important;
-    filter:drop-shadow(0 0 8px rgba(255,61,0,.42)) !important;
-}}
-
-/* Flechas sidebar: siempre visibles, neon y sin circulo */
-button[data-testid="stSidebarCollapseButton"],
-div[data-testid="stSidebarCollapseButton"],
-div[data-testid="stSidebarCollapseButton"] button,
-button[title*="sidebar" i],
-button[aria-label*="sidebar" i],
-button[title*="barra lateral" i],
-button[aria-label*="barra lateral" i]{{
-    display:flex !important;
-    align-items:center !important;
-    justify-content:center !important;
-    position:fixed !important;
-    left:252px !important;
-    bottom:18px !important;
-    top:auto !important;
-    right:auto !important;
-    width:32px !important;
-    height:32px !important;
-    min-width:32px !important;
-    min-height:32px !important;
-    padding:0 !important;
-    margin:0 !important;
-    background:transparent !important;
-    background-color:transparent !important;
-    border:0 !important;
-    outline:0 !important;
-    border-radius:0 !important;
-    box-shadow:none !important;
-    color:{NARANJO} !important;
-    opacity:1 !important;
-    visibility:visible !important;
-    pointer-events:auto !important;
-    z-index:2147483647 !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] button[data-testid="stSidebarCollapseButton"],
-section[data-testid="stSidebar"][aria-expanded="false"] div[data-testid="stSidebarCollapseButton"],
-section[data-testid="stSidebar"][aria-expanded="false"] div[data-testid="stSidebarCollapseButton"] button,
-section[data-testid="stSidebar"][aria-expanded="false"] button[title*="sidebar" i],
-section[data-testid="stSidebar"][aria-expanded="false"] button[aria-label*="sidebar" i],
-section[data-testid="stSidebar"][aria-expanded="false"] button[title*="barra lateral" i],
-section[data-testid="stSidebar"][aria-expanded="false"] button[aria-label*="barra lateral" i]{{
-    left:22px !important;
-}}
-
-button[data-testid="stSidebarCollapseButton"] svg,
-div[data-testid="stSidebarCollapseButton"] svg,
-div[data-testid="stSidebarCollapseButton"] button svg,
-button[title*="sidebar" i] svg,
-button[aria-label*="sidebar" i] svg,
-button[title*="barra lateral" i] svg,
-button[aria-label*="barra lateral" i] svg{{
-    width:25px !important;
-    height:25px !important;
-    color:{NARANJO} !important;
-    stroke:{NARANJO} !important;
-    fill:none !important;
-    filter:
-        drop-shadow(0 0 4px rgba(255,61,0,.95))
-        drop-shadow(0 0 12px rgba(255,61,0,.58)) !important;
-}}
-
-button[data-testid="stSidebarCollapseButton"] svg *,
-div[data-testid="stSidebarCollapseButton"] svg *,
-div[data-testid="stSidebarCollapseButton"] button svg *,
-button[title*="sidebar" i] svg *,
-button[aria-label*="sidebar" i] svg *,
-button[title*="barra lateral" i] svg *,
-button[aria-label*="barra lateral" i] svg *{{
-    stroke:{NARANJO} !important;
-    fill:none !important;
-}}
-
-/* Refuerzo final: icono naranjo corporativo incluso si Streamlit usa currentColor */
-button[data-testid="stSidebarCollapseButton"],
-button[data-testid="stSidebarCollapseButton"] *,
-div[data-testid="stSidebarCollapseButton"],
-div[data-testid="stSidebarCollapseButton"] *,
-button[title*="sidebar" i],
-button[title*="sidebar" i] *,
-button[aria-label*="sidebar" i],
-button[aria-label*="sidebar" i] *,
-button[title*="barra lateral" i],
-button[title*="barra lateral" i] *,
-button[aria-label*="barra lateral" i],
-button[aria-label*="barra lateral" i] *{{
-    color:{NARANJO} !important;
-    -webkit-text-fill-color:{NARANJO} !important;
-}}
-
-button[data-testid="stSidebarCollapseButton"] svg,
-button[data-testid="stSidebarCollapseButton"] svg path,
-button[data-testid="stSidebarCollapseButton"] svg polyline,
-button[data-testid="stSidebarCollapseButton"] svg line,
-div[data-testid="stSidebarCollapseButton"] svg,
-div[data-testid="stSidebarCollapseButton"] svg path,
-div[data-testid="stSidebarCollapseButton"] svg polyline,
-div[data-testid="stSidebarCollapseButton"] svg line,
-button[title*="sidebar" i] svg,
-button[title*="sidebar" i] svg path,
-button[title*="sidebar" i] svg polyline,
-button[title*="sidebar" i] svg line,
-button[aria-label*="sidebar" i] svg,
-button[aria-label*="sidebar" i] svg path,
-button[aria-label*="sidebar" i] svg polyline,
-button[aria-label*="sidebar" i] svg line,
-button[title*="barra lateral" i] svg,
-button[title*="barra lateral" i] svg path,
-button[title*="barra lateral" i] svg polyline,
-button[title*="barra lateral" i] svg line,
-button[aria-label*="barra lateral" i] svg,
-button[aria-label*="barra lateral" i] svg path,
-button[aria-label*="barra lateral" i] svg polyline,
-button[aria-label*="barra lateral" i] svg line{{
-    color:{NARANJO} !important;
-    stroke:{NARANJO} !important;
-    fill:none !important;
-    filter:
-        drop-shadow(0 0 5px rgba(255,61,0,1))
-        drop-shadow(0 0 14px rgba(255,61,0,.72))
-        drop-shadow(0 0 24px rgba(255,61,0,.42)) !important;
-}}
-
-/*======================================================
-FILTROS EJECUTIVOS: TITULO DENTRO DEL DESPLEGABLE
-======================================================*/
-
-section[data-testid="stSidebar"] .filter-section-label{{
-    position:relative !important;
-    z-index:8 !important;
-    width:42px !important;
-    height:42px !important;
-    margin:18px 0 -38px 4px !important;
-    pointer-events:none !important;
-    transform:translateX(0) translateY(4px) !important;
-    filter:
-        drop-shadow(0 0 8px rgba(46,203,242,.48))
-        drop-shadow(0 12px 16px rgba(0,0,0,.30)) !important;
-}}
-
-section[data-testid="stSidebar"] .filter-section-label .filter-label-copy{{
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] .filter-section-label .filter-icon{{
-    position:relative !important;
-    width:40px !important;
-    height:40px !important;
-    border-radius:14px !important;
-    border:1px solid rgba(46,203,242,.78) !important;
-    background:
-        radial-gradient(circle at 50% 50%,rgba(46,203,242,.14),transparent 58%),
-        linear-gradient(145deg,rgba(46,203,242,.08),rgba(253,108,152,.035)) !important;
-    backdrop-filter:blur(10px) saturate(1.2) !important;
-    box-shadow:
-        0 0 0 1px rgba(20,220,188,.12),
-        0 0 14px rgba(46,203,242,.44),
-        0 0 26px rgba(46,203,242,.18),
-        0 10px 18px rgba(0,0,0,.24),
-        inset 0 1px 0 rgba(255,255,255,.16),
-        inset 0 0 18px rgba(46,203,242,.10) !important;
-}}
-
-section[data-testid="stSidebar"] .filter-section-label .filter-icon::before{{
-    content:"";
-    position:absolute;
-    inset:5px;
-    border-radius:11px;
-    border:1px solid rgba(20,220,188,.28);
-    box-shadow:inset 0 0 10px rgba(46,203,242,.18);
-}}
-
-section[data-testid="stSidebar"] .filter-section-label .filter-icon::after{{
-    content:"";
-    position:absolute;
-    inset:-3px;
-    border-radius:16px;
-    border:1px solid rgba(253,108,152,.16);
-    opacity:.78;
-}}
-
-section[data-testid="stSidebar"] .filter-section-label .filter-icon svg{{
-    position:relative !important;
-    z-index:2 !important;
-    width:21px !important;
-    height:21px !important;
-    color:{CELESTE} !important;
-    stroke:{CELESTE} !important;
-    fill:none !important;
-    stroke-width:2.35 !important;
-    filter:
-        drop-shadow(0 0 5px rgba(46,203,242,.88))
-        drop-shadow(0 0 13px rgba(20,220,188,.34)) !important;
-}}
-
-section[data-testid="stSidebar"] .filter-section-label .filter-icon svg *,
-section[data-testid="stSidebar"] .filter-section-label .filter-icon svg path,
-section[data-testid="stSidebar"] .filter-section-label .filter-icon svg circle{{
-    stroke:{CELESTE} !important;
-    fill:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]{{
-    width:calc(100% - 48px) !important;
-    margin-left:48px !important;
-    transform:none !important;
-    transition:border-color .16s ease, background .16s ease, box-shadow .16s ease !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:hover{{
-    transform:none !important;
-    box-shadow:
-        0 16px 30px rgba(0,0,0,.30),
-        0 4px 0 rgba(0,0,0,.26),
-        inset 0 1px 0 rgba(255,255,255,.07) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary{{
-    position:relative !important;
-    overflow:visible !important;
-    min-height:42px !important;
-    padding:8px 12px 8px 34px !important;
-    display:flex !important;
-    align-items:center !important;
-    gap:0 !important;
-    border-radius:11px !important;
-    border:1px solid rgba(46,203,242,.34) !important;
-    background:
-        linear-gradient(90deg,rgba(46,203,242,.16),rgba(14,28,48,.74) 48%,rgba(253,108,152,.07)) !important;
-    box-shadow:
-        0 14px 24px rgba(0,0,0,.24),
-        inset 0 1px 0 rgba(255,255,255,.09) !important;
-    list-style:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary::-webkit-details-marker{{
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary::marker{{
-    content:"" !important;
-    color:transparent !important;
-    font-size:0 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary > svg,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary span > svg,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary [data-testid="stExpanderToggleIcon"],
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary [data-testid="stExpanderToggleIcon"] *{{
-    width:0 !important;
-    height:0 !important;
-    min-width:0 !important;
-    max-width:0 !important;
-    opacity:0 !important;
-    visibility:hidden !important;
-    overflow:hidden !important;
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary > span:first-child:not(:has(p)){{
-    width:0 !important;
-    height:0 !important;
-    min-width:0 !important;
-    opacity:0 !important;
-    visibility:hidden !important;
-    overflow:hidden !important;
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary::before{{
-    content:"\\203A";
-    position:absolute;
-    left:34px;
-    top:50%;
-    transform:translateY(-50%);
-    color:{CELESTE};
-    font-size:16px;
-    font-weight:950;
-    line-height:1;
-    text-shadow:
-        0 0 6px rgba(46,203,242,.80),
-        0 0 16px rgba(46,203,242,.35);
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:hover{{
-    border-color:rgba(46,203,242,.58) !important;
-    background:
-        linear-gradient(90deg,rgba(46,203,242,.22),rgba(15,34,56,.82) 52%,rgba(253,108,152,.10)) !important;
-    box-shadow:
-        0 14px 24px rgba(0,0,0,.24),
-        0 0 18px rgba(46,203,242,.13),
-        inset 0 1px 0 rgba(255,255,255,.11) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary p{{
-    display:block !important;
-    position:absolute !important;
-    z-index:9 !important;
-    left:52px !important;
-    top:50% !important;
-    transform:translateY(-50%) !important;
-    width:auto !important;
-    min-width:0 !important;
-    max-width:none !important;
-    white-space:nowrap !important;
-    overflow:visible !important;
-    margin:0 !important;
-    color:#FFFFFF !important;
-    font-size:12px !important;
-    line-height:1 !important;
-    font-weight:950 !important;
-    letter-spacing:.09em !important;
-    text-transform:uppercase !important;
-    text-shadow:0 0 12px rgba(46,203,242,.16) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary::after{{
-    content:"";
-    position:absolute;
-    left:132px;
-    right:14px;
-    top:50%;
-    transform:translateY(-50%);
-    height:2px;
-    border-radius:999px;
-    background:linear-gradient(90deg,{CELESTE},rgba(46,203,242,.20),rgba(253,108,152,.34),transparent);
-    box-shadow:0 0 12px rgba(46,203,242,.26);
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details[open] summary{{
-    border-color:rgba(20,220,188,.54) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details[open] summary::after{{
-    background:linear-gradient(90deg,{CELESTE},rgba(20,220,188,.55),rgba(253,108,152,.38),transparent);
-    box-shadow:
-        0 0 13px rgba(46,203,242,.34),
-        0 0 20px rgba(20,220,188,.14);
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary svg,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary svg path,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary svg polyline{{
-    display:none !important;
-    opacity:0 !important;
-    visibility:hidden !important;
-}}
-
-/* Flecha real del desplegable: nativa, clickeable y naranjo Entel */
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary::before{{
-    content:none !important;
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary::-webkit-details-marker{{
-    display:inline-block !important;
-    color:{NARANJO} !important;
-    filter:drop-shadow(0 0 8px rgba(255,61,0,.62)) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary::marker{{
-    content:normal !important;
-    color:{NARANJO} !important;
-    font-size:15px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary > svg,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary span > svg,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary [data-testid="stExpanderToggleIcon"],
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary [data-testid="stExpanderToggleIcon"] *{{
-    display:block !important;
-    visibility:visible !important;
-    opacity:1 !important;
-    width:17px !important;
-    height:17px !important;
-    min-width:17px !important;
-    max-width:17px !important;
-    color:{NARANJO} !important;
-    stroke:{NARANJO} !important;
-    fill:none !important;
-    filter:
-        drop-shadow(0 0 5px rgba(255,61,0,.95))
-        drop-shadow(0 0 13px rgba(255,61,0,.50)) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary > span:first-child:not(:has(p)){{
-    display:flex !important;
-    align-items:center !important;
-    justify-content:center !important;
-    visibility:visible !important;
-    opacity:1 !important;
-    width:18px !important;
-    min-width:18px !important;
-    height:18px !important;
-    position:absolute !important;
-    left:28px !important;
-    top:50% !important;
-    transform:translateY(-50%) !important;
-    color:{NARANJO} !important;
-    pointer-events:auto !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary p{{
-    left:50px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary::after{{
-    left:128px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpanderContent"]{{
-    padding:12px 12px 14px 12px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] div[data-testid="column"]{{
-    min-width:0 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] div[data-testid="stButton"] button{{
-    min-height:31px !important;
-    padding:0 10px !important;
-    white-space:nowrap !important;
-    word-break:keep-all !important;
-    overflow:hidden !important;
-    text-overflow:ellipsis !important;
-    font-size:11px !important;
-    letter-spacing:.04em !important;
-    border-radius:999px !important;
-    border:1px solid rgba(255,61,0,.45) !important;
-    background:
-        linear-gradient(135deg,rgba(255,61,0,.16),rgba(46,203,242,.08)) !important;
-    box-shadow:
-        0 0 0 1px rgba(255,61,0,.10),
-        0 0 12px rgba(255,61,0,.18),
-        inset 0 1px 0 rgba(255,255,255,.08) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] div[data-testid="stButton"] button::before{{
-    content:"";
-    width:10px;
-    height:10px;
-    min-width:10px;
-    margin-right:7px;
-    border-radius:999px;
-    border:1px solid {NARANJO};
-    background:rgba(255,61,0,.18);
-    box-shadow:
-        0 0 7px rgba(255,61,0,.70),
-        0 0 14px rgba(255,61,0,.35),
-        inset 0 0 6px rgba(255,61,0,.24);
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] div[data-testid="stButton"] button:hover{{
-    border-color:rgba(255,61,0,.70) !important;
-    background:
-        linear-gradient(135deg,rgba(255,61,0,.22),rgba(46,203,242,.11)) !important;
-    filter:brightness(1.05);
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] div[data-testid="stButton"] button p,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] div[data-testid="stButton"] button span{{
-    white-space:nowrap !important;
-    word-break:keep-all !important;
-    overflow:hidden !important;
-    text-overflow:ellipsis !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] div[data-testid="stCheckbox"] label p{{
-    white-space:normal !important;
-    overflow-wrap:normal !important;
-    word-break:normal !important;
-    line-height:1.15 !important;
-}}
-
-/* Estabilidad: hover premium sin saltos ni temblores */
-section[data-testid="stSidebar"] *,
-section[data-testid="stSidebar"] *:hover,
-section[data-testid="stSidebar"] *:focus,
-section[data-testid="stSidebar"] *:active{{
-    transform-origin:center center !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stButton"] button:hover,
-section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] button:hover,
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:hover,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:hover{{
-    transform:none !important;
-}}
-
-.estado-info-note{{
-    display:flex;
-    align-items:center;
-    gap:10px;
-    margin:12px 0 2px 0;
-    padding:11px 14px;
-    border-radius:12px;
-    border:1px solid rgba(253,108,152,.36);
-    background:
-        linear-gradient(135deg,rgba(253,108,152,.13),rgba(255,255,255,.92) 42%,rgba(46,203,242,.08));
-    color:#694052;
-    font-size:12px;
-    font-weight:800;
-    box-shadow:
-        0 12px 26px rgba(253,108,152,.10),
-        inset 0 1px 0 rgba(255,255,255,.86);
-}}
-
-.estado-info-note .info-icon{{
-    width:25px;
-    height:25px;
-    min-width:25px;
-    border-radius:9px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    background:linear-gradient(135deg,{ROSADO},#FF9DBA);
-    color:#FFFFFF;
-    font-weight:950;
-    box-shadow:0 8px 16px rgba(253,108,152,.28);
-}}
-
-/*======================================================
-BLINDAJE VISUAL: MODO OSCURO DEL NAVEGADOR
-======================================================*/
-
-:root,
-html,
-body,
-.stApp,
-div[data-testid="stAppViewContainer"],
-section.main,
-.block-container{{
-    color-scheme:light !important;
-    forced-color-adjust:none !important;
-}}
-
-html,
-body{{
-    background:#F4F7FB !important;
-    color:#0F172A !important;
-}}
-
-*{{
-    color-scheme:light !important;
-}}
-
-html,
-body,
-.stApp,
-div[data-testid="stAppViewContainer"],
-div[data-testid="stMain"],
-section[data-testid="stSidebar"],
-div[data-testid="stPlotlyChart"],
-div[data-testid="stDataFrame"],
-.metric-card,
-.disp-kpi-card,
-.ai-insight-card{{
-    user-select:none !important;
-    -webkit-user-select:none !important;
-}}
-
-input,
-textarea,
-select,
-button,
-div[data-testid="stPlotlyChart"],
-canvas,
-svg,
-img{{
-    color-scheme:light !important;
-    forced-color-adjust:none !important;
-}}
-
-img,
-svg,
-canvas{{
-    filter:none;
-    mix-blend-mode:normal !important;
-}}
-
-@media (prefers-color-scheme: dark){{
-    html,
-    body,
-    .stApp,
-    div[data-testid="stAppViewContainer"]{{
-        background:
-            radial-gradient(circle at 88% 4%,rgba(46,203,242,.16),transparent 28%),
-            radial-gradient(circle at 20% 0%,rgba(16,6,159,.08),transparent 32%),
-            linear-gradient(180deg,#FBFCFF 0%,#F3F7FC 100%) !important;
-        color:#0F172A !important;
-    }}
-}}
-
-/*======================================================
-NEON GERENCIAL ENTEL: PREMIUM SIN PERDER LECTURA
-======================================================*/
-
-html,
-body,
-.stApp,
-div[data-testid="stAppViewContainer"]{{
-    background:
-        radial-gradient(circle at 92% 5%,rgba(46,203,242,.22),transparent 28%),
-        radial-gradient(circle at 5% 7%,rgba(16,6,159,.10),transparent 30%),
-        radial-gradient(circle at 86% 78%,rgba(253,108,152,.10),transparent 26%),
-        linear-gradient(180deg,#FBFCFF 0%,#F3F8FF 48%,#EFF5FC 100%) !important;
-}}
-
-@media (prefers-color-scheme: dark){{
-    html,
-    body,
-    .stApp,
-    div[data-testid="stAppViewContainer"]{{
-        background:
-            radial-gradient(circle at 92% 5%,rgba(46,203,242,.22),transparent 28%),
-            radial-gradient(circle at 5% 7%,rgba(16,6,159,.10),transparent 30%),
-            radial-gradient(circle at 86% 78%,rgba(253,108,152,.10),transparent 26%),
-            linear-gradient(180deg,#FBFCFF 0%,#F3F8FF 48%,#EFF5FC 100%) !important;
-        color:#0F172A !important;
-    }}
-}}
-
-.block-container{{
-    background:
-        linear-gradient(180deg,rgba(255,255,255,.42),rgba(255,255,255,.12)) !important;
-}}
-
-.titulo{{
-    color:{AZUL} !important;
-    text-shadow:
-        0 0 18px rgba(0,92,255,.18),
-        0 6px 18px rgba(16,6,159,.10) !important;
-}}
-
-.subtitulo{{
-    color:#526174 !important;
-}}
-
-.linea-titulo,
-.kpi-divider{{
-    height:4px !important;
-    background:
-        linear-gradient(90deg,{AZUL} 0%,{AZUL_CLARO} 28%,{CELESTE} 54%,{ROSADO} 78%,{NARANJO} 100%) !important;
-    box-shadow:
-        0 0 10px rgba(46,203,242,.42),
-        0 0 18px rgba(0,92,255,.22),
-        0 0 26px rgba(253,108,152,.12) !important;
-}}
-
-.kpi-title{{
-    color:#101827 !important;
-    text-shadow:
-        0 0 14px rgba(46,203,242,.12),
-        0 5px 16px rgba(16,6,159,.08) !important;
-}}
-
-div[data-testid="stPlotlyChart"]{{
-    border-radius:13px !important;
-    border:1px solid rgba(46,203,242,.24) !important;
-    background:
-        linear-gradient(145deg,rgba(255,255,255,.96),rgba(248,252,255,.92)) !important;
-    box-shadow:
-        0 18px 36px rgba(15,23,42,.10),
-        0 0 0 1px rgba(255,255,255,.72),
-        0 0 16px rgba(46,203,242,.16),
-        0 0 28px rgba(0,92,255,.08),
-        inset 0 1px 0 rgba(255,255,255,.95) !important;
-}}
-
-div[data-testid="stPlotlyChart"]:hover{{
-    border-color:rgba(46,203,242,.38) !important;
-    box-shadow:
-        0 20px 40px rgba(15,23,42,.12),
-        0 0 0 1px rgba(255,255,255,.82),
-        0 0 20px rgba(46,203,242,.20),
-        0 0 32px rgba(253,108,152,.10),
-        inset 0 1px 0 rgba(255,255,255,.95) !important;
-}}
-
-.brand-lockup,
-.estado-info-note{{
-    box-shadow:
-        0 14px 30px rgba(15,23,42,.10),
-        0 0 18px rgba(46,203,242,.14),
-        inset 0 1px 0 rgba(255,255,255,.78) !important;
-}}
-
-.estado-info-note{{
-    border-color:rgba(253,108,152,.46) !important;
-    background:
-        linear-gradient(135deg,rgba(253,108,152,.15),rgba(255,255,255,.88) 46%,rgba(46,203,242,.11)) !important;
-}}
-
-/* Descarga puntual de revisitas: flecha neon ejecutiva */
-.revisita-export-shell{{
-    height:100%;
-    min-height:74px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    padding:4px 0;
-}}
-
-.revisita-download-icon{{
-    width:54px;
-    height:58px;
-    border-radius:16px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    text-decoration:none !important;
-    color:{NARANJO} !important;
-    color-scheme:light !important;
-    forced-color-adjust:none !important;
-    border:1px solid rgba(255,61,0,.72);
-    background:
-        radial-gradient(circle at 50% 16%,rgba(255,255,255,.50),transparent 24%),
-        radial-gradient(circle at 78% 82%,rgba(46,203,242,.22),transparent 34%),
-        linear-gradient(145deg,rgba(255,61,0,.24),rgba(255,255,255,.92) 48%,rgba(46,203,242,.15));
-    box-shadow:
-        0 0 12px rgba(255,61,0,.52),
-        0 0 22px rgba(46,203,242,.26),
-        0 14px 28px rgba(15,23,42,.13),
-        inset 0 1px 0 rgba(255,255,255,.88),
-        inset 0 -12px 22px rgba(255,61,0,.10);
-    transition:box-shadow .16s ease, border-color .16s ease, filter .16s ease;
-}}
-
-.revisita-download-icon:hover{{
-    color:#FFFFFF !important;
-    border-color:rgba(255,61,0,.95);
-    background:
-        radial-gradient(circle at 50% 16%,rgba(255,255,255,.36),transparent 24%),
-        radial-gradient(circle at 78% 82%,rgba(46,203,242,.32),transparent 34%),
-        linear-gradient(145deg,rgba(255,61,0,.86),rgba(255,83,36,.78) 48%,rgba(46,203,242,.26));
-    box-shadow:
-        0 0 16px rgba(255,61,0,.76),
-        0 0 32px rgba(46,203,242,.30),
-        0 16px 30px rgba(15,23,42,.16),
-        inset 0 1px 0 rgba(255,255,255,.76);
-    filter:brightness(1.04);
-}}
-
-.revisita-download-icon svg{{
-    width:28px;
-    height:28px;
-    stroke:currentColor;
-    filter:
-        drop-shadow(0 0 5px rgba(255,61,0,.65))
-        drop-shadow(0 0 8px rgba(46,203,242,.30));
-}}
-
-@media (prefers-color-scheme: dark){{
-    .revisita-download-icon{{
-        color:{NARANJO} !important;
-        background:
-            radial-gradient(circle at 50% 16%,rgba(255,255,255,.50),transparent 24%),
-            radial-gradient(circle at 78% 82%,rgba(46,203,242,.22),transparent 34%),
-            linear-gradient(145deg,rgba(255,61,0,.24),rgba(255,255,255,.92) 48%,rgba(46,203,242,.15)) !important;
-    }}
-}}
-
-/* Logo IBM integrado: sin placa blanca */
-.brand-lockup,
-.brand-lockup-ibm{{
-    height:52px !important;
-    display:flex !important;
-    align-items:flex-start !important;
-    justify-content:flex-end !important;
-    background:transparent !important;
-    border:0 !important;
-    box-shadow:none !important;
-    filter:none !important;
-    padding:0 !important;
-    margin:0 !important;
-}}
-
-.brand-lockup img,
-.brand-lockup-ibm img{{
-    width:104px !important;
-    height:auto !important;
-    display:block !important;
-    background:transparent !important;
-    border:0 !important;
-    box-shadow:none !important;
-    opacity:.96 !important;
-    mix-blend-mode:multiply !important;
-    filter:
-        drop-shadow(0 0 4px rgba(46,203,242,.20))
-        drop-shadow(0 8px 11px rgba(16,6,159,.10)) !important;
-}}
-
-/*======================================================
-NAVEGACION KPI TIPO CARPETA
-======================================================*/
-
-div[role="radiogroup"][aria-label="Selector KPI"]{{
-    display:flex;
-    flex-wrap:wrap;
-    gap:8px;
-    align-items:flex-end;
-    padding:18px 0 0 0;
-    margin:8px 0 22px 0;
-    border-bottom:4px solid rgba(46,203,242,.72);
-    filter:drop-shadow(0 0 14px rgba(46,203,242,.22));
-}}
-
-div[role="radiogroup"][aria-label="Selector KPI"] label{{
-    position:relative;
-    min-width:238px;
-    min-height:70px;
-    padding:18px 24px 13px 24px;
-    margin:0 0 -4px 0;
-    border:1px solid rgba(46,203,242,.42);
-    border-bottom:0;
-    border-radius:14px 14px 0 0;
-    background:
-        radial-gradient(circle at 90% 0%,rgba(46,203,242,.24),transparent 28%),
-        linear-gradient(180deg,rgba(255,255,255,.88),rgba(236,249,255,.64));
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.95),0 -2px 18px rgba(46,203,242,.14),0 12px 22px rgba(16,6,159,.07);
-    transform:translateY(5px);
-    transition:all .18s ease;
-}}
-
-div[role="radiogroup"][aria-label="Selector KPI"] label:hover{{
-    transform:translateY(0);
-    border-color:rgba(46,203,242,.82);
-    box-shadow:0 0 20px rgba(46,203,242,.30),inset 0 1px 0 rgba(255,255,255,.95);
-}}
-
-div[role="radiogroup"][aria-label="Selector KPI"] label:has(input:checked){{
-    background:linear-gradient(180deg,#FFFFFF 0%,#F4FCFF 100%);
-    border-color:#2ECBF2;
-    transform:translateY(0);
-    z-index:2;
-    box-shadow:0 0 0 1px rgba(46,203,242,.58),0 0 28px rgba(46,203,242,.50),0 -2px 30px rgba(16,6,159,.18);
-}}
-
-div[role="radiogroup"][aria-label="Selector KPI"] label:has(input:checked)::before{{
-    content:"";
-    position:absolute;
-    left:10px;
-    right:10px;
-    top:0;
-    height:4px;
-    border-radius:999px;
-    background:linear-gradient(90deg,#10069F,#2ECBF2,#FF3D00);
-    box-shadow:0 0 14px rgba(46,203,242,.80);
-}}
-
-div[role="radiogroup"][aria-label="Selector KPI"] label p{{
-    color:#005CFF !important;
-    font-weight:950 !important;
-    letter-spacing:0 !important;
-    font-size:15px !important;
-    line-height:1.22 !important;
-    margin:0 !important;
-    white-space:normal !important;
-}}
-
-div[role="radiogroup"][aria-label="Selector KPI"] label input{{
-    position:absolute !important;
-    opacity:0 !important;
-    width:0 !important;
-    height:0 !important;
-    pointer-events:none !important;
-}}
-
-div[role="radiogroup"][aria-label="Selector KPI"] label > div:first-child:not(:has(p)){{
-    display:none !important;
-}}
-
-div[role="radiogroup"][aria-label="Selector KPI"] label:has(input:checked) p{{
-    color:#10069F !important;
-    text-shadow:0 0 12px rgba(46,203,242,.34);
-}}
-
-/*======================================================
-LIQUID GLASS NEON - ESTILO EPA PARA DASHBOARD
-======================================================*/
-
-@property --dash-border-angle {{
-    syntax:"<angle>";
-    initial-value:0deg;
-    inherits:false;
-}}
-
-@keyframes dashBorderSpin {{
-    to {{ --dash-border-angle:360deg; }}
-}}
-
-@keyframes dashGridDrift {{
-    from {{ background-position:0 0, 0 0, 0 0; }}
-    to {{ background-position:48px 48px, -48px 24px, 0 0; }}
-}}
-
-@keyframes glassSweep {{
-    0% {{ transform:translateX(-120%) skewX(-18deg); opacity:0; }}
-    18% {{ opacity:.74; }}
-    48% {{ opacity:.38; }}
-    100% {{ transform:translateX(150%) skewX(-18deg); opacity:0; }}
-}}
-
-@keyframes glassBreath {{
-    0%,100% {{
-        box-shadow:
-            0 18px 42px rgba(0,0,0,.18),
-            0 0 0 1px rgba(46,203,242,.18),
-            0 0 24px rgba(46,203,242,.10);
-    }}
-    50% {{
-        box-shadow:
-            0 22px 52px rgba(0,0,0,.22),
-            0 0 0 1px rgba(46,203,242,.32),
-            0 0 34px rgba(46,203,242,.22);
-    }}
-}}
-
-@keyframes neonPulseLine {{
-    0%,100% {{ filter:drop-shadow(0 0 7px rgba(46,203,242,.44)); opacity:.86; }}
-    50% {{ filter:drop-shadow(0 0 18px rgba(46,203,242,.92)); opacity:1; }}
-}}
-
-.stApp{{
-    background:
-        linear-gradient(rgba(255,255,255,.030) 1px, transparent 1px),
-        linear-gradient(90deg,rgba(255,255,255,.030) 1px, transparent 1px),
-        radial-gradient(circle at 12% 8%,rgba(0,92,255,.34),transparent 34rem),
-        radial-gradient(circle at 92% 10%,rgba(253,108,152,.20),transparent 32rem),
-        radial-gradient(circle at 54% 92%,rgba(46,203,242,.18),transparent 30rem),
-        linear-gradient(135deg,#061426 0%,#07111E 45%,#160A18 100%) !important;
-    background-size:24px 24px,24px 24px,auto,auto,auto,auto !important;
-    animation:dashGridDrift 34s linear infinite;
-}}
-
-div[data-testid="stAppViewContainer"] > .main .block-container{{
-    position:relative;
-    max-width:1500px;
-    padding-top:2.2rem;
-    padding-bottom:3rem;
-    border-radius:28px;
-    border:1px solid rgba(255,255,255,.34);
-    background:
-        radial-gradient(circle at 92% 4%,rgba(46,203,242,.18),transparent 26rem),
-        radial-gradient(circle at 5% 12%,rgba(255,255,255,.56),transparent 22rem),
-        linear-gradient(135deg,rgba(255,255,255,.78),rgba(236,249,255,.58) 48%,rgba(255,255,255,.46));
-    backdrop-filter:blur(22px) saturate(1.45);
-    -webkit-backdrop-filter:blur(22px) saturate(1.45);
-    box-shadow:
-        0 28px 78px rgba(0,0,0,.26),
-        inset 0 1px 0 rgba(255,255,255,.78),
-        0 0 0 1px rgba(46,203,242,.12);
-}}
-
-div[data-testid="stAppViewContainer"] > .main .block-container::before{{
-    content:"";
-    position:absolute;
-    inset:0;
-    border-radius:28px;
-    padding:2px;
-    pointer-events:none;
-    background:conic-gradient(
-        from var(--dash-border-angle),
-        rgba(46,203,242,.95),
-        rgba(0,92,255,.72),
-        rgba(255,61,0,.74),
-        rgba(253,108,152,.64),
-        rgba(46,203,242,.95)
-    );
-    -webkit-mask:
-        linear-gradient(#000 0 0) content-box,
-        linear-gradient(#000 0 0);
-    -webkit-mask-composite:xor;
-    mask-composite:exclude;
-    opacity:.72;
-    animation:dashBorderSpin 9s linear infinite;
-}}
-
-.titulo{{
-    color:#FFFFFF !important;
-    font-size:clamp(40px,4.5vw,64px) !important;
-    letter-spacing:0 !important;
-    text-shadow:
-        0 0 12px rgba(46,203,242,.56),
-        0 0 28px rgba(0,92,255,.32),
-        0 14px 24px rgba(0,0,0,.20) !important;
-}}
-
-.subtitulo{{
-    color:#D9F6FF !important;
-    text-shadow:0 0 12px rgba(46,203,242,.22);
-}}
-
-.linea-titulo,
-.kpi-divider{{
-    height:5px !important;
-    border-radius:999px !important;
-    background:linear-gradient(90deg,{AZUL},{AZUL_CLARO},{CELESTE},{NARANJO},{ROSADO}) !important;
-    background-size:220% 100% !important;
-    box-shadow:
-        0 0 14px rgba(46,203,242,.58),
-        0 0 26px rgba(0,92,255,.28) !important;
-    animation:neonPulseLine 3.4s ease-in-out infinite;
-}}
-
-section[data-testid="stSidebar"]{{
-    position:relative !important;
-    overflow:visible !important;
-    border-right:0 !important;
-    background:
-        linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
-        linear-gradient(90deg,rgba(255,255,255,.035) 1px, transparent 1px),
-        radial-gradient(circle at 22% 0%,rgba(46,203,242,.22),transparent 18rem),
-        radial-gradient(circle at 100% 18%,rgba(253,108,152,.18),transparent 16rem),
-        linear-gradient(180deg,rgba(5,12,24,.94),rgba(4,9,18,.98)) !important;
-    background-size:24px 24px,24px 24px,auto,auto,auto !important;
-    backdrop-filter:blur(24px) saturate(1.35);
-    -webkit-backdrop-filter:blur(24px) saturate(1.35);
-    box-shadow:
-        24px 0 62px rgba(0,0,0,.34),
-        inset -1px 0 0 rgba(46,203,242,.24) !important;
-}}
-
-section[data-testid="stSidebar"]::before{{
-    content:"";
-    position:absolute;
-    inset:9px 8px 18px 8px;
-    border-radius:24px;
-    padding:2px;
-    pointer-events:none;
-    z-index:4;
-    background:conic-gradient(
-        from var(--dash-border-angle),
-        rgba(46,203,242,1),
-        rgba(0,92,255,.80),
-        rgba(255,61,0,.82),
-        rgba(253,108,152,.72),
-        rgba(46,203,242,1)
-    );
-    -webkit-mask:
-        linear-gradient(#000 0 0) content-box,
-        linear-gradient(#000 0 0);
-    -webkit-mask-composite:xor;
-    mask-composite:exclude;
-    filter:drop-shadow(0 0 12px rgba(46,203,242,.70));
-    animation:dashBorderSpin 5.4s linear infinite;
-}}
-
-section[data-testid="stSidebar"]::after{{
-    content:"";
-    position:absolute;
-    top:0;
-    right:-2px;
-    width:3px;
-    height:100%;
-    pointer-events:none;
-    background:linear-gradient(180deg,{AZUL_CLARO},{CELESTE},{NARANJO},{ROSADO},{CELESTE});
-    box-shadow:
-        0 0 16px rgba(46,203,242,.78),
-        0 0 30px rgba(0,92,255,.36);
-    animation:neonPulseLine 2.6s ease-in-out infinite;
-}}
-
-.sidebar-logo-shell{{
-    position:relative;
-    padding:14px 0 6px;
-    border-radius:22px;
-    background:
-        radial-gradient(circle at 50% 0%,rgba(255,255,255,.18),transparent 42%),
-        linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.015));
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.12);
-}}
-
-.filter-section-label{{
-    position:relative;
-    overflow:hidden;
-    min-height:58px;
-    border-radius:17px !important;
-    border:1px solid rgba(46,203,242,.40) !important;
-    background:
-        radial-gradient(circle at 14% 0%,rgba(46,203,242,.22),transparent 34%),
-        linear-gradient(135deg,rgba(255,255,255,.11),rgba(255,255,255,.035)) !important;
-    backdrop-filter:blur(16px) saturate(1.35);
-    -webkit-backdrop-filter:blur(16px) saturate(1.35);
-    box-shadow:
-        0 14px 30px rgba(0,0,0,.24),
-        inset 0 1px 0 rgba(255,255,255,.18),
-        0 0 18px rgba(46,203,242,.12) !important;
-}}
-
-.filter-section-label::after{{
-    content:"";
-    position:absolute;
-    inset:-40% -70%;
-    background:linear-gradient(115deg,transparent 44%,rgba(255,255,255,.22) 50%,transparent 56%);
-    animation:glassSweep 7s ease-in-out infinite;
-    pointer-events:none;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]{{
-    position:relative;
-    overflow:hidden;
-    border-radius:18px !important;
-    border:1px solid rgba(46,203,242,.38) !important;
-    background:
-        linear-gradient(145deg,rgba(255,255,255,.105),rgba(255,255,255,.035) 62%,rgba(46,203,242,.055)) !important;
-    backdrop-filter:blur(18px) saturate(1.35);
-    -webkit-backdrop-filter:blur(18px) saturate(1.35);
-    box-shadow:
-        0 16px 34px rgba(0,0,0,.30),
-        inset 0 1px 0 rgba(255,255,255,.16),
-        0 0 18px rgba(46,203,242,.13) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]:has(details[open]){{
-    border-color:rgba(46,203,242,.72) !important;
-    box-shadow:
-        0 0 0 1px rgba(46,203,242,.24),
-        0 0 26px rgba(46,203,242,.24),
-        0 18px 38px rgba(0,0,0,.32),
-        inset 0 1px 0 rgba(255,255,255,.20) !important;
-}}
-
-div[data-testid="stPlotlyChart"]{{
-    position:relative;
-    overflow:hidden;
-    border-radius:22px;
-    border:1px solid rgba(46,203,242,.34);
-    background:
-        radial-gradient(circle at 92% 0%,rgba(46,203,242,.18),transparent 24%),
-        radial-gradient(circle at 0% 100%,rgba(253,108,152,.10),transparent 28%),
-        linear-gradient(135deg,rgba(255,255,255,.72),rgba(238,249,255,.48));
-    backdrop-filter:blur(18px) saturate(1.3);
-    -webkit-backdrop-filter:blur(18px) saturate(1.3);
-    box-shadow:
-        0 18px 42px rgba(0,0,0,.16),
-        inset 0 1px 0 rgba(255,255,255,.72),
-        0 0 22px rgba(46,203,242,.10);
-    animation:glassBreath 6.8s ease-in-out infinite;
-}}
-
-div[data-testid="stPlotlyChart"]::before{{
-    content:"";
-    position:absolute;
-    inset:-30% -70%;
-    z-index:3;
-    pointer-events:none;
-    background:linear-gradient(115deg,transparent 44%,rgba(255,255,255,.28) 50%,transparent 56%);
-    animation:glassSweep 8.5s ease-in-out infinite;
-}}
-
-div[data-testid="stPlotlyChart"]::after{{
-    content:"";
-    position:absolute;
-    inset:0;
-    z-index:4;
-    pointer-events:none;
-    border-radius:22px;
-    padding:1px;
-    background:conic-gradient(
-        from var(--dash-border-angle),
-        rgba(46,203,242,.72),
-        rgba(0,92,255,.42),
-        rgba(255,61,0,.46),
-        rgba(253,108,152,.42),
-        rgba(46,203,242,.72)
-    );
-    -webkit-mask:
-        linear-gradient(#000 0 0) content-box,
-        linear-gradient(#000 0 0);
-    -webkit-mask-composite:xor;
-    mask-composite:exclude;
-    animation:dashBorderSpin 8s linear infinite;
-}}
-
-div[data-testid="stDataFrame"],
-div[data-testid="stTable"]{{
-    overflow:hidden;
-    border-radius:18px;
-    border:1px solid rgba(46,203,242,.28);
-    background:rgba(255,255,255,.62);
-    backdrop-filter:blur(14px) saturate(1.2);
-    -webkit-backdrop-filter:blur(14px) saturate(1.2);
-    box-shadow:
-        0 16px 34px rgba(0,0,0,.12),
-        inset 0 1px 0 rgba(255,255,255,.66);
-}}
-
-div[role="radiogroup"][aria-label="Selector KPI"]{{
-    position:relative;
-    padding:18px 0 0 0 !important;
-    border-bottom:1px solid rgba(46,203,242,.58) !important;
-    filter:drop-shadow(0 0 18px rgba(46,203,242,.20));
-}}
-
-div[role="radiogroup"][aria-label="Selector KPI"] label{{
-    overflow:hidden;
-    border-radius:18px 18px 0 0 !important;
-    border-color:rgba(46,203,242,.42) !important;
-    background:
-        radial-gradient(circle at 92% 0%,rgba(46,203,242,.26),transparent 32%),
-        linear-gradient(180deg,rgba(255,255,255,.74),rgba(236,249,255,.50)) !important;
-    backdrop-filter:blur(16px) saturate(1.35);
-    -webkit-backdrop-filter:blur(16px) saturate(1.35);
-}}
-
-div[role="radiogroup"][aria-label="Selector KPI"] label:has(input:checked){{
-    background:
-        radial-gradient(circle at 92% 0%,rgba(46,203,242,.36),transparent 36%),
-        linear-gradient(180deg,rgba(255,255,255,.94),rgba(239,252,255,.74)) !important;
-    box-shadow:
-        0 0 0 1px rgba(46,203,242,.64),
-        0 0 32px rgba(46,203,242,.48),
-        0 -2px 30px rgba(16,6,159,.18),
-        inset 0 1px 0 rgba(255,255,255,.92) !important;
-}}
-
-div[role="radiogroup"][aria-label="Selector KPI"] label:has(input:checked)::after{{
-    content:"";
-    position:absolute;
-    inset:-50% -85%;
-    background:linear-gradient(115deg,transparent 45%,rgba(255,255,255,.42) 50%,transparent 55%);
-    animation:glassSweep 6.4s ease-in-out infinite;
-    pointer-events:none;
-}}
-
-.kpi-title{{
-    color:#07162F !important;
-    text-shadow:0 0 12px rgba(46,203,242,.34),0 10px 18px rgba(255,255,255,.42);
-}}
-
-.chart-card,
-.kpi-card{{
-    border:1px solid rgba(46,203,242,.30) !important;
-    background:
-        radial-gradient(circle at 100% 0%,rgba(46,203,242,.14),transparent 28%),
-        linear-gradient(135deg,rgba(255,255,255,.72),rgba(255,255,255,.44)) !important;
-    backdrop-filter:blur(18px) saturate(1.28);
-    -webkit-backdrop-filter:blur(18px) saturate(1.28);
-    box-shadow:
-        0 18px 42px rgba(0,0,0,.14),
-        inset 0 1px 0 rgba(255,255,255,.72),
-        0 0 20px rgba(46,203,242,.11) !important;
-}}
-
-/*======================================================
-CORRECCION VISUAL: FONDO OSCURO TOTAL + FILTROS LIMPIOS
-======================================================*/
-
-div[data-testid="stAppViewContainer"],
-section.main,
-div[data-testid="stAppViewContainer"] > .main,
-.main .block-container,
-.block-container,
-div[data-testid="stAppViewContainer"] > .main .block-container{{
-    background:
-        linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
-        linear-gradient(90deg,rgba(255,255,255,.035) 1px, transparent 1px),
-        radial-gradient(circle at 13% 7%,rgba(0,92,255,.32),transparent 34rem),
-        radial-gradient(circle at 92% 16%,rgba(253,108,152,.16),transparent 30rem),
-        radial-gradient(circle at 56% 96%,rgba(46,203,242,.16),transparent 32rem),
-        linear-gradient(135deg,#061426 0%,#07111E 48%,#160A18 100%) !important;
-    background-size:24px 24px,24px 24px,auto,auto,auto,auto !important;
-}}
-
-div[data-testid="stAppViewContainer"] > .main .block-container,
-.main .block-container,
-.block-container{{
-    border-radius:0 !important;
-    border:0 !important;
-    box-shadow:none !important;
-    backdrop-filter:none !important;
-    -webkit-backdrop-filter:none !important;
-}}
-
-div[data-testid="stAppViewContainer"] > .main .block-container::before{{
-    display:none !important;
-}}
-
-div[data-testid="stAppViewContainer"] > .main{{
-    border-left:1px solid rgba(46,203,242,.30);
-    box-shadow:inset 1px 0 0 rgba(255,255,255,.035);
-}}
-
-.titulo{{
-    color:#F7FBFF !important;
-    text-shadow:
-        0 0 10px rgba(46,203,242,.64),
-        0 0 24px rgba(0,92,255,.36),
-        0 15px 24px rgba(0,0,0,.46) !important;
-}}
-
-.subtitulo{{
-    color:#BDEFFF !important;
-    opacity:.96;
-}}
-
-.brand-lockup img,
-.brand-lockup-ibm img{{
-    mix-blend-mode:screen !important;
-    opacity:.94 !important;
-    filter:
-        drop-shadow(0 0 8px rgba(46,203,242,.36))
-        drop-shadow(0 10px 16px rgba(0,0,0,.24)) !important;
-}}
-
-.brand-lockup-ecc{{
-    height:50px !important;
-    align-items:center !important;
-    justify-content:flex-end !important;
-}}
-
-.brand-lockup-ecc img{{
-    width:118px !important;
-    max-width:118px !important;
-    padding:6px 9px !important;
-    border-radius:8px !important;
-    background:
-        linear-gradient(115deg,rgba(3,10,22,.58),rgba(4,16,34,.26) 62%,rgba(46,203,242,.08)) !important;
-    mix-blend-mode:normal !important;
-    opacity:.95 !important;
-    box-shadow:
-        inset 0 1px 0 rgba(255,255,255,.10),
-        0 0 0 1px rgba(46,203,242,.10),
-        0 10px 18px rgba(0,0,0,.16) !important;
-    filter:
-        drop-shadow(0 0 6px rgba(46,203,242,.18))
-        drop-shadow(0 8px 10px rgba(0,0,0,.14)) !important;
-}}
-
-section[data-testid="stSidebar"] .filter-section-label{{
-    display:grid !important;
-    grid-template-columns:46px minmax(0,1fr) 20px !important;
-    align-items:center !important;
-    gap:10px !important;
-    min-height:58px !important;
-    width:100% !important;
-    margin:0 0 11px 0 !important;
-    padding:9px 12px 9px 9px !important;
-    border-radius:15px !important;
-    border:1px solid rgba(46,203,242,.50) !important;
-    background:
-        linear-gradient(90deg,rgba(46,203,242,.16),rgba(0,92,255,.07) 58%,rgba(253,108,152,.08)) !important;
-    box-shadow:
-        0 12px 24px rgba(0,0,0,.24),
-        inset 0 1px 0 rgba(255,255,255,.10),
-        0 0 18px rgba(46,203,242,.16) !important;
-    filter:none !important;
-    transform:none !important;
-}}
-
-section[data-testid="stSidebar"] .filter-section-label::after{{
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] .filter-section-label .filter-icon{{
-    position:relative !important;
-    left:auto !important;
-    top:auto !important;
-    right:auto !important;
-    bottom:auto !important;
-    transform:none !important;
-    width:38px !important;
-    height:38px !important;
-    min-width:38px !important;
-    margin:0 !important;
-    padding:0 !important;
-    border-radius:12px !important;
-    display:grid !important;
-    place-items:center !important;
-    color:{CELESTE} !important;
-    border:1px solid rgba(46,203,242,.62) !important;
-    background:
-        radial-gradient(circle at 38% 24%,rgba(255,255,255,.24),transparent 28%),
-        linear-gradient(145deg,rgba(46,203,242,.20),rgba(0,92,255,.10)) !important;
-    box-shadow:
-        0 0 14px rgba(46,203,242,.34),
-        inset 0 1px 0 rgba(255,255,255,.22) !important;
-}}
-
-section[data-testid="stSidebar"] .filter-section-label .filter-icon::before,
-section[data-testid="stSidebar"] .filter-section-label .filter-icon::after{{
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] .filter-section-label .filter-icon svg{{
-    width:21px !important;
-    height:21px !important;
-    display:block !important;
-    overflow:visible !important;
-    stroke:{CELESTE} !important;
-    fill:none !important;
-    stroke-width:2.1 !important;
-    filter:drop-shadow(0 0 6px rgba(46,203,242,.58)) !important;
-}}
-
-section[data-testid="stSidebar"] .filter-section-label .filter-icon svg *,
-section[data-testid="stSidebar"] .filter-section-label .filter-icon svg path,
-section[data-testid="stSidebar"] .filter-section-label .filter-icon svg circle{{
-    stroke:{CELESTE} !important;
-    fill:none !important;
-}}
-
-section[data-testid="stSidebar"] .filter-section-label .filter-label-copy{{
-    min-width:0 !important;
-    display:flex !important;
-    flex-direction:column !important;
-    justify-content:center !important;
-    gap:2px !important;
-}}
-
-section[data-testid="stSidebar"] .filter-label-copy b{{
-    color:#FFFFFF !important;
-    font-size:12px !important;
-    font-weight:950 !important;
-    letter-spacing:.07em !important;
-    text-transform:uppercase !important;
-    line-height:1.05 !important;
-    text-shadow:0 0 10px rgba(46,203,242,.34);
-}}
-
-section[data-testid="stSidebar"] .filter-label-copy small{{
-    color:#8FEFFF !important;
-    font-size:9.5px !important;
-    font-weight:800 !important;
-    letter-spacing:0 !important;
-    line-height:1.05 !important;
-    opacity:.78 !important;
-}}
-
-section[data-testid="stSidebar"] .filter-section-label::before{{
-    content:"";
-    width:18px;
-    height:2px;
-    justify-self:end;
-    border-radius:999px;
-    background:linear-gradient(90deg,{CELESTE},{ROSADO});
-    box-shadow:0 0 9px rgba(46,203,242,.64);
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] .filter-section-label{{
-    display:grid !important;
-    grid-template-columns:1fr !important;
-    width:46px !important;
-    height:46px !important;
-    min-height:46px !important;
-    padding:4px !important;
-    margin:0 auto 14px auto !important;
-    place-items:center !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] .filter-section-label .filter-icon{{
-    width:36px !important;
-    height:36px !important;
-    min-width:36px !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] .filter-section-label::before,
-section[data-testid="stSidebar"][aria-expanded="false"] .filter-label-copy{{
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] .filter-section-label{{
-    grid-template-columns:34px minmax(0,1fr) 18px !important;
-    min-height:50px !important;
-    padding:8px 11px !important;
-    gap:10px !important;
-    border-radius:14px !important;
-    background:
-        linear-gradient(90deg,rgba(8,22,39,.96),rgba(6,18,34,.90) 58%,rgba(15,25,39,.92)) !important;
-}}
-
-section[data-testid="stSidebar"] .filter-symbol{{
-    width:28px !important;
-    height:28px !important;
-    min-width:28px !important;
-    display:block !important;
-    border-radius:10px !important;
-    border:1px solid rgba(46,203,242,.42) !important;
-    background-color:rgba(46,203,242,.08) !important;
-    background-repeat:no-repeat !important;
-    background-position:center !important;
-    background-size:17px 17px !important;
-    box-shadow:
-        0 0 10px rgba(46,203,242,.20),
-        inset 0 1px 0 rgba(255,255,255,.12) !important;
-}}
-
-section[data-testid="stSidebar"] .filter-symbol-region{{
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232ECBF2' stroke-width='2.15' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 21s6-5.2 6-11a6 6 0 0 0-12 0c0 5.8 6 11 6 11Z'/%3E%3Ccircle cx='12' cy='10' r='2.4'/%3E%3C/svg%3E") !important;
-}}
-
-section[data-testid="stSidebar"] .filter-symbol-tech{{
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232ECBF2' stroke-width='2.15' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='7.5' r='3.2'/%3E%3Cpath d='M5.5 20c.8-4.4 3.2-6.5 6.5-6.5s5.7 2.1 6.5 6.5'/%3E%3C/svg%3E") !important;
-}}
-
-section[data-testid="stSidebar"] .filter-symbol-period{{
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232ECBF2' stroke-width='2.15' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 4v3M17 4v3M4.5 9h15'/%3E%3Crect x='4' y='6' width='16' height='14' rx='2.5'/%3E%3Cpath d='M8 13h3M13 13h3'/%3E%3C/svg%3E") !important;
-}}
-
-section[data-testid="stSidebar"] .filter-icon,
-section[data-testid="stSidebar"] .filter-icon *,
-section[data-testid="stSidebar"] .filter-icon::before,
-section[data-testid="stSidebar"] .filter-icon::after{{
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] .filter-section-label::before{{
-    width:16px !important;
-    height:2px !important;
-    opacity:.85 !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] .filter-section-label{{
-    grid-template-columns:1fr !important;
-    width:42px !important;
-    height:42px !important;
-    min-height:42px !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] .filter-symbol{{
-    width:30px !important;
-    height:30px !important;
-    min-width:30px !important;
-}}
-
-div[data-testid="stPlotlyChart"]{{
-    border:1px solid rgba(46,203,242,.36) !important;
-    background:
-        radial-gradient(circle at 96% 8%,rgba(46,203,242,.16),transparent 26%),
-        radial-gradient(circle at 0% 100%,rgba(253,108,152,.08),transparent 30%),
-        linear-gradient(135deg,rgba(7,18,34,.86),rgba(5,13,25,.72)) !important;
-    box-shadow:
-        0 18px 42px rgba(0,0,0,.24),
-        inset 0 1px 0 rgba(255,255,255,.09),
-        0 0 22px rgba(46,203,242,.12) !important;
-}}
-
-div[data-testid="stPlotlyChart"] .main-svg{{
-    background:transparent !important;
-}}
-
-div[data-testid="stPlotlyChart"] .bg{{
-    fill:rgba(6,18,34,.70) !important;
-}}
-
-div[data-testid="stPlotlyChart"] .gridlayer path{{
-    stroke:rgba(143,239,255,.14) !important;
-}}
-
-div[data-testid="stPlotlyChart"] .zerolinelayer path{{
-    stroke:rgba(143,239,255,.16) !important;
-}}
-
-div[data-testid="stPlotlyChart"] .legend rect.bg{{
-    fill:rgba(6,18,34,.84) !important;
-    stroke:rgba(46,203,242,.35) !important;
-}}
-
-div[data-testid="stPlotlyChart"] .xtick text,
-div[data-testid="stPlotlyChart"] .ytick text,
-div[data-testid="stPlotlyChart"] .legend text{{
-    fill:#DDFBFF !important;
-}}
-
-div[data-testid="stMarkdownContainer"] > div[style*="background:radial-gradient"],
-div[data-testid="stMarkdownContainer"] > div[style*="background: radial-gradient"],
-div[data-testid="stMarkdownContainer"] > div[style*="border-top"]{{
-    background:
-        radial-gradient(circle at 96% 18%,rgba(46,203,242,.16),transparent 24%),
-        linear-gradient(180deg,rgba(7,18,34,.92),rgba(5,13,25,.82)) !important;
-    border-color:rgba(46,203,242,.40) !important;
-    box-shadow:
-        0 16px 34px rgba(0,0,0,.24),
-        inset 0 1px 0 rgba(255,255,255,.10),
-        0 0 18px rgba(46,203,242,.12) !important;
-}}
-
-div[data-testid="stMarkdownContainer"] > div[style*="background:radial-gradient"] div,
-div[data-testid="stMarkdownContainer"] > div[style*="background: radial-gradient"] div,
-div[data-testid="stMarkdownContainer"] > div[style*="border-top"] div{{
-    color:#EAFBFF !important;
-}}
-
-/*======================================================
-AJUSTE FINAL: FILTROS TIPO EXPORTAR + ESTADO COMPACTO
-======================================================*/
-
-section[data-testid="stSidebar"] .filter-section-label{{
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"]{{
-    margin:0 0 26px 0 !important;
-    padding:0 !important;
-    border:0 !important;
-    border-radius:14px !important;
-    background:transparent !important;
-    box-shadow:none !important;
-    overflow:visible !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details{{
-    overflow:hidden !important;
-    border-radius:14px !important;
-    border:1px solid rgba(253,108,152,.56) !important;
-    background:
-        radial-gradient(circle at 82% 18%,rgba(253,108,152,.35),transparent 36%),
-        radial-gradient(circle at 16% 86%,rgba(46,203,242,.16),transparent 34%),
-        linear-gradient(145deg,rgba(253,108,152,.16),rgba(18,8,32,.95) 62%,rgba(5,10,20,.98)) !important;
-    box-shadow:
-        0 0 18px rgba(253,108,152,.20),
-        0 16px 30px rgba(0,0,0,.30),
-        inset 0 1px 0 rgba(255,255,255,.10) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details[open]{{
-    border-color:rgba(253,108,152,.88) !important;
-    box-shadow:
-        0 0 22px rgba(253,108,152,.28),
-        0 0 28px rgba(46,203,242,.13),
-        0 18px 32px rgba(0,0,0,.32),
-        inset 0 1px 0 rgba(255,255,255,.14) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:hover,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:focus,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:active{{
-    display:grid !important;
-    grid-template-columns:minmax(0,1fr) 18px !important;
-    align-items:center !important;
-    gap:12px !important;
-    min-height:62px !important;
-    padding:12px 15px !important;
-    border:0 !important;
-    background:transparent !important;
-    cursor:pointer !important;
-    list-style:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary::-webkit-details-marker{{
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary svg,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary [data-testid="stExpanderToggleIcon"]{{
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary > span{{
-    display:grid !important;
-    grid-template-columns:42px minmax(0,1fr) !important;
-    align-items:center !important;
-    gap:17px !important;
-    width:100% !important;
-    height:auto !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary > span > span{{
-    display:flex !important;
-    align-items:center !important;
-    justify-content:center !important;
-    width:42px !important;
-    height:42px !important;
-    min-width:42px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary > span > div,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary [data-testid="stMarkdownContainer"]{{
-    display:block !important;
-    min-width:0 !important;
-    width:100% !important;
-    height:auto !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary [data-testid="stIconMaterial"]{{
-    display:block !important;
-    box-sizing:border-box !important;
-    width:42px;
-    height:42px;
-    min-width:42px;
-    border-radius:12px;
-    border:1px solid rgba(253,108,152,.82);
-    color:transparent !important;
-    font-size:0 !important;
-    line-height:0 !important;
-    overflow:hidden !important;
-    background-color:rgba(253,108,152,.14) !important;
-    background-image:
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='2.35' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6h16'/%3E%3Cpath d='M4 12h16'/%3E%3Cpath d='M4 18h16'/%3E%3Ccircle cx='9' cy='6' r='2'/%3E%3Ccircle cx='15' cy='12' r='2'/%3E%3Ccircle cx='11' cy='18' r='2'/%3E%3C/svg%3E"),
-        radial-gradient(circle at 50% 30%,rgba(253,108,152,.30),transparent 42%),
-        linear-gradient(145deg,rgba(253,108,152,.22),rgba(46,203,242,.10)) !important;
-    background-repeat:no-repeat,no-repeat,no-repeat !important;
-    background-position:center,center,center !important;
-    background-size:24px 24px,cover,cover !important;
-    box-shadow:
-        0 0 15px rgba(253,108,152,.48),
-        0 0 24px rgba(46,203,242,.18),
-        inset 0 1px 0 rgba(255,255,255,.22);
-}}
-
-section[data-testid="stSidebar"] .filter-anchor{{
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details:has(.filter-anchor-region) summary [data-testid="stIconMaterial"]{{
-    background-image:
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 21s6-5.2 6-11a6 6 0 0 0-12 0c0 5.8 6 11 6 11Z'/%3E%3Ccircle cx='12' cy='10' r='2.4'/%3E%3C/svg%3E"),
-        radial-gradient(circle at 50% 30%,rgba(46,203,242,.34),transparent 42%),
-        linear-gradient(145deg,rgba(46,203,242,.26),rgba(253,108,152,.14)) !important;
-    border-color:rgba(46,203,242,.82) !important;
-    box-shadow:
-        0 0 15px rgba(46,203,242,.48),
-        0 0 24px rgba(253,108,152,.16),
-        inset 0 1px 0 rgba(255,255,255,.22) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details:has(.filter-anchor-tech) summary [data-testid="stIconMaterial"]{{
-    background-image:
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='7.5' r='3.2'/%3E%3Cpath d='M5.5 20c.8-4.4 3.2-6.5 6.5-6.5s5.7 2.1 6.5 6.5'/%3E%3C/svg%3E"),
-        radial-gradient(circle at 50% 30%,rgba(253,108,152,.34),transparent 42%),
-        linear-gradient(145deg,rgba(253,108,152,.25),rgba(46,203,242,.12)) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details:has(.filter-anchor-period) summary [data-testid="stIconMaterial"]{{
-    background-image:
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 4v3M17 4v3M4.5 9h15'/%3E%3Crect x='4' y='6' width='16' height='14' rx='2.5'/%3E%3Cpath d='M8 13h3M13 13h3'/%3E%3C/svg%3E"),
-        radial-gradient(circle at 50% 30%,rgba(71,225,144,.30),transparent 42%),
-        linear-gradient(145deg,rgba(71,225,144,.20),rgba(46,203,242,.16)) !important;
-    border-color:rgba(71,225,144,.70) !important;
-    box-shadow:
-        0 0 15px rgba(71,225,144,.34),
-        0 0 24px rgba(46,203,242,.18),
-        inset 0 1px 0 rgba(255,255,255,.22) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary::before{{
-    content:none !important;
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary::after{{
-    content:"";
-    width:18px;
-    height:2px;
-    justify-self:end;
-    border-radius:999px;
-    background:linear-gradient(90deg,{CELESTE},{ROSADO});
-    box-shadow:0 0 9px rgba(46,203,242,.58);
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary p{{
-    min-width:0 !important;
-    max-width:100% !important;
-    margin:0 !important;
-    display:flex !important;
-    flex-direction:column !important;
-    gap:3px !important;
-    color:#FFFFFF !important;
-    font-size:15px !important;
-    font-weight:950 !important;
-    line-height:1.08 !important;
-    letter-spacing:0 !important;
-    white-space:normal !important;
-    overflow:visible !important;
-    text-overflow:clip !important;
-    word-break:keep-all !important;
-    overflow-wrap:normal !important;
-    text-shadow:0 0 10px rgba(46,203,242,.18);
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary p::before{{
-    content:"Filtro";
-    color:{ROSADO};
-    font-size:9.5px;
-    font-weight:900;
-    text-transform:uppercase;
-    letter-spacing:.12em;
-    line-height:1;
-    text-shadow:0 0 10px rgba(253,108,152,.42);
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpanderContent"]{{
-    margin:0 !important;
-    padding:12px !important;
-    border-top:1px solid rgba(253,108,152,.24) !important;
-    background:linear-gradient(180deg,rgba(5,12,24,.86),rgba(3,8,16,.94)) !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] div[data-testid="stExpander"]{{
-    display:none !important;
-}}
-
-.estado-final-heading{{
-    margin:12px 0 10px 0 !important;
-    padding:10px 14px 8px 14px !important;
-    border-radius:14px !important;
-    background:
-        radial-gradient(circle at 8% 45%,rgba(46,203,242,.18),transparent 28%),
-        linear-gradient(90deg,rgba(46,203,242,.14),rgba(253,108,152,.05),transparent 76%) !important;
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.08) !important;
-}}
-
-.estado-final-heading .kpi-title{{
-    margin:0 0 8px 0 !important;
-    font-size:clamp(19px,1.4vw,23px) !important;
-    color:#F8FAFC !important;
-    font-weight:950 !important;
-    letter-spacing:0 !important;
-    text-shadow:
-        0 0 12px rgba(46,203,242,.72),
-        0 0 22px rgba(0,92,255,.32),
-        0 8px 18px rgba(0,0,0,.46) !important;
-}}
-
-.estado-final-heading .kpi-divider{{
-    margin:0 0 10px 0 !important;
-    height:4px !important;
-    border-radius:999px !important;
-    box-shadow:0 0 18px rgba(46,203,242,.62) !important;
-}}
-
-div[data-testid="element-container"]:has(.estado-final-heading),
-div[data-testid="stElementContainer"]:has(.estado-final-heading){{
-    margin-top:0 !important;
-    margin-bottom:0 !important;
-}}
-
-div[data-testid="stPlotlyChart"]{{
-    margin-bottom:6px !important;
-}}
-
-.estado-info-note{{
-    margin:14px 0 4px 0 !important;
-    padding:13px 16px !important;
-    border:1px solid rgba(253,108,152,.58) !important;
-    border-radius:14px !important;
-    background:
-        radial-gradient(circle at 10% 50%,rgba(253,108,152,.22),transparent 26%),
-        linear-gradient(135deg,rgba(10,22,39,.96),rgba(17,16,35,.92) 62%,rgba(5,10,20,.96)) !important;
-    color:#F8FAFC !important;
-    font-size:13px !important;
-    font-weight:900 !important;
-    letter-spacing:0 !important;
-    box-shadow:
-        0 16px 32px rgba(0,0,0,.28),
-        0 0 22px rgba(253,108,152,.18),
-        inset 0 1px 0 rgba(255,255,255,.12) !important;
-}}
-
-.estado-info-note .info-icon{{
-    background:
-        radial-gradient(circle at 50% 28%,rgba(255,255,255,.28),transparent 36%),
-        linear-gradient(135deg,{ROSADO},#FF3D73) !important;
-    color:#FFFFFF !important;
-    box-shadow:
-        0 0 14px rgba(253,108,152,.52),
-        inset 0 1px 0 rgba(255,255,255,.24) !important;
-}}
-
-/* Pulido final sidebar: queda solo la linea viva que separa el panel. */
-section[data-testid="stSidebar"]{{
-    border-right:0 !important;
-    box-shadow:none !important;
-}}
-
-section[data-testid="stSidebar"]::before{{
-    content:none !important;
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"]::after{{
-    top:10px !important;
-    right:-3px !important;
-    bottom:10px !important;
-    width:4px !important;
-    height:auto !important;
-    border-radius:999px !important;
-    background:linear-gradient(180deg,{AZUL_CLARO},{CELESTE},{NARANJO},{ROSADO},{CELESTE}) !important;
-    box-shadow:
-        0 0 18px rgba(46,203,242,.78),
-        0 0 30px rgba(0,92,255,.36),
-        0 0 22px rgba(253,108,152,.26) !important;
-}}
-
-@media (prefers-reduced-motion:reduce){{
-    .stApp,
-    div[data-testid="stAppViewContainer"] > .main .block-container::before,
-    section[data-testid="stSidebar"]::before,
-    section[data-testid="stSidebar"]::after,
-    div[data-testid="stPlotlyChart"],
-    div[data-testid="stPlotlyChart"]::before,
-    div[data-testid="stPlotlyChart"]::after,
-    .filter-section-label::after,
-    div[role="radiogroup"][aria-label="Selector KPI"] label:has(input:checked)::after,
-    .linea-titulo,
-    .kpi-divider{{
-        animation:none !important;
-    }}
-}}
-
-
-/*======================================================
-FILTROS COMO BOTONES PREMIUM - AJUSTE FINAL EXPORTAR DATOS
-======================================================*/
-
-/* Alineación real con el botón Exportar datos:
-   se corrige el empuje hacia la derecha y se baja el grosor visual. */
-section[data-testid="stSidebar"] div[data-testid="stExpander"]{{
-    width:230px !important;
-    max-width:230px !important;
-    margin:0 0 22px -10px !important;
-    padding:0 !important;
-    overflow:visible !important;
-    border:0 !important;
-    background:transparent !important;
-    box-shadow:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details{{
-    width:230px !important;
-    min-height:64px !important;
-    border-radius:14px !important;
-    border:1px solid rgba(253,108,152,.66) !important;
-    background:
-        radial-gradient(circle at 82% 18%,rgba(253,108,152,.46),transparent 36%),
-        radial-gradient(circle at 16% 86%,rgba(46,203,242,.16),transparent 34%),
-        linear-gradient(145deg,rgba(253,108,152,.22),rgba(18,8,32,.96) 62%,rgba(5,10,20,.98)) !important;
-    box-shadow:
-        0 0 18px rgba(253,108,152,.22),
-        0 16px 30px rgba(0,0,0,.30),
-        inset 0 1px 0 rgba(255,255,255,.10) !important;
-    overflow:hidden !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details[open]{{
-    border-color:rgba(253,108,152,.90) !important;
-    filter:brightness(1.04);
-    box-shadow:
-        0 0 22px rgba(253,108,152,.34),
-        0 0 28px rgba(46,203,242,.12),
-        0 18px 32px rgba(0,0,0,.32),
-        inset 0 1px 0 rgba(255,255,255,.14) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details::before{{
-    content:none !important;
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:hover,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:focus,
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary:active{{
-    display:grid !important;
-    grid-template-columns:minmax(0,1fr) 18px !important;
-    align-items:center !important;
-    gap:8px !important;
-    min-height:64px !important;
-    padding:14px 15px !important;
-    background:transparent !important;
-    border:0 !important;
-    cursor:pointer !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary > span{{
-    display:grid !important;
-    grid-template-columns:36px minmax(0,1fr) !important;
-    align-items:center !important;
-    gap:26px !important;
-    width:100% !important;
-}}
-
-/* Icono idéntico al estilo Exportar datos: tamaño 36 y color rosado */
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary [data-testid="stIconMaterial"]{{
-    width:36px !important;
-    height:36px !important;
-    min-width:36px !important;
-    border-radius:12px !important;
-    display:flex !important;
-    align-items:center !important;
-    justify-content:center !important;
-    color:{ROSADO} !important;
-    border:1px solid rgba(253,108,152,.46) !important;
-    background:
-        radial-gradient(circle at 50% 30%,rgba(253,108,152,.22),transparent 42%),
-        linear-gradient(145deg,rgba(253,108,152,.16),rgba(255,255,255,.035)) !important;
-    box-shadow:
-        0 0 13px rgba(253,108,152,.32),
-        inset 0 1px 0 rgba(255,255,255,.16) !important;
-}}
-
-/* Anula colores anteriores por región/técnico/periodo y deja todos rosados */
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details:has(.filter-anchor-region) summary [data-testid="stIconMaterial"]{{
-    background-image:
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FD6C98' stroke-width='2.35' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 21s6-5.2 6-11a6 6 0 0 0-12 0c0 5.8 6 11 6 11Z'/%3E%3Ccircle cx='12' cy='10' r='2.4'/%3E%3C/svg%3E"),
-        radial-gradient(circle at 50% 30%,rgba(253,108,152,.22),transparent 42%),
-        linear-gradient(145deg,rgba(253,108,152,.16),rgba(255,255,255,.035)) !important;
-    background-repeat:no-repeat,no-repeat,no-repeat !important;
-    background-position:center,center,center !important;
-    background-size:23px 23px,cover,cover !important;
-    border-color:rgba(253,108,152,.46) !important;
-    box-shadow:0 0 13px rgba(253,108,152,.32), inset 0 1px 0 rgba(255,255,255,.16) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details:has(.filter-anchor-tech) summary [data-testid="stIconMaterial"]{{
-    background-image:
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FD6C98' stroke-width='2.35' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='7.5' r='3.2'/%3E%3Cpath d='M5.5 20c.8-4.4 3.2-6.5 6.5-6.5s5.7 2.1 6.5 6.5'/%3E%3C/svg%3E"),
-        radial-gradient(circle at 50% 30%,rgba(253,108,152,.22),transparent 42%),
-        linear-gradient(145deg,rgba(253,108,152,.16),rgba(255,255,255,.035)) !important;
-    background-repeat:no-repeat,no-repeat,no-repeat !important;
-    background-position:center,center,center !important;
-    background-size:23px 23px,cover,cover !important;
-    border-color:rgba(253,108,152,.46) !important;
-    box-shadow:0 0 13px rgba(253,108,152,.32), inset 0 1px 0 rgba(255,255,255,.16) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details:has(.filter-anchor-period) summary [data-testid="stIconMaterial"]{{
-    background-image:
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FD6C98' stroke-width='2.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 4v3M17 4v3M4.5 9h15'/%3E%3Crect x='4' y='6' width='16' height='14' rx='2.5'/%3E%3Cpath d='M8 13h3M13 13h3'/%3E%3C/svg%3E"),
-        radial-gradient(circle at 50% 30%,rgba(253,108,152,.22),transparent 42%),
-        linear-gradient(145deg,rgba(253,108,152,.16),rgba(255,255,255,.035)) !important;
-    background-repeat:no-repeat,no-repeat,no-repeat !important;
-    background-position:center,center,center !important;
-    background-size:23px 23px,cover,cover !important;
-    border-color:rgba(253,108,152,.46) !important;
-    box-shadow:0 0 13px rgba(253,108,152,.32), inset 0 1px 0 rgba(255,255,255,.16) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details:has(.filter-anchor-client) summary [data-testid="stIconMaterial"]{{
-    background-image:
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FD6C98' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='9' cy='8' r='3'/%3E%3Cpath d='M3.8 19c.7-4 2.6-6 5.2-6s4.5 2 5.2 6'/%3E%3Ccircle cx='17' cy='9.5' r='2.4'/%3E%3Cpath d='M14.2 14.2c2.7.2 4.6 1.8 5.8 4.8'/%3E%3C/svg%3E"),
-        radial-gradient(circle at 50% 30%,rgba(253,108,152,.22),transparent 42%),
-        linear-gradient(145deg,rgba(253,108,152,.16),rgba(255,255,255,.035)) !important;
-    background-repeat:no-repeat,no-repeat,no-repeat !important;
-    background-position:center,center,center !important;
-    background-size:23px 23px,cover,cover !important;
-    border-color:rgba(253,108,152,.46) !important;
-    box-shadow:0 0 13px rgba(253,108,152,.32), inset 0 1px 0 rgba(255,255,255,.16) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details:has(.filter-anchor-coord) summary [data-testid="stIconMaterial"],
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details:has(.filter-anchor-coordinator) summary [data-testid="stIconMaterial"]{{
-    background-image:
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FD6C98' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='9' cy='8' r='3'/%3E%3Cpath d='M3.8 19c.7-4 2.6-6 5.2-6s4.5 2 5.2 6'/%3E%3Cpath d='m15 12 2 2 4-5'/%3E%3C/svg%3E"),
-        radial-gradient(circle at 50% 30%,rgba(253,108,152,.22),transparent 42%),
-        linear-gradient(145deg,rgba(253,108,152,.16),rgba(255,255,255,.035)) !important;
-    background-repeat:no-repeat,no-repeat,no-repeat !important;
-    background-position:center,center,center !important;
-    background-size:23px 23px,cover,cover !important;
-    border-color:rgba(253,108,152,.46) !important;
-    box-shadow:0 0 13px rgba(253,108,152,.32), inset 0 1px 0 rgba(255,255,255,.16) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary p{{
-    margin:0 0 0 10px !important;
-    display:flex !important;
-    flex-direction:column !important;
-    color:#FFFFFF !important;
-    font-size:14px !important;
-    font-weight:950 !important;
-    line-height:1.04 !important;
-    letter-spacing:-.02em !important;
-    text-transform:uppercase !important;
-    text-shadow:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary p::before{{
-    content:"FILTRO" !important;
-    color:{ROSADO} !important;
-    font-size:9px !important;
-    font-weight:950 !important;
-    letter-spacing:.15em !important;
-    line-height:1 !important;
-    margin-bottom:3px !important;
-    text-transform:uppercase !important;
-    text-shadow:0 0 8px rgba(253,108,152,.36) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary::before{{
-    content:none !important;
-    display:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details summary::after{{
-    content:"" !important;
-    width:18px !important;
-    height:2px !important;
-    justify-self:end !important;
-    border-radius:999px !important;
-    background:linear-gradient(90deg,{CELESTE},{ROSADO}) !important;
-    box-shadow:0 0 9px rgba(46,203,242,.60) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpanderContent"]{{
-    border-top:1px solid rgba(253,108,152,.22) !important;
-    background:linear-gradient(180deg,rgba(5,12,24,.86),rgba(3,8,16,.96)) !important;
-    padding:12px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpanderContent"] div[data-testid="stButton"] button{{
-    min-height:32px !important;
-    border-radius:10px !important;
-    background:
-        linear-gradient(135deg,rgba(253,108,152,.20),rgba(10,7,20,.88)) !important;
-    border:1px solid rgba(253,108,152,.52) !important;
-    color:#FFFFFF !important;
-    font-size:10.5px !important;
-    font-weight:950 !important;
-    letter-spacing:.04em !important;
-    text-transform:uppercase !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpanderContent"] div[data-testid="stButton"] button:hover{{
-    background:
-        linear-gradient(135deg,rgba(253,108,152,.28),rgba(16,6,159,.46)) !important;
-    border-color:rgba(253,108,152,.78) !important;
-}}
-
-section[data-testid="stSidebar"][aria-expanded="false"] div[data-testid="stExpander"]{{
-    display:none !important;
-}}
-
-/*======================================================
-PULIDO KPI DISPONIBILIDAD: FILTRO ESTADO
-======================================================*/
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details:has(.filter-anchor-status) summary [data-testid="stIconMaterial"]{{
-    background-image:
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FD6C98' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5 9.2 17 19 7'/%3E%3Cpath d='M20 12a8 8 0 1 1-3.4-6.5'/%3E%3C/svg%3E"),
-        radial-gradient(circle at 50% 30%,rgba(253,108,152,.22),transparent 42%),
-        linear-gradient(145deg,rgba(253,108,152,.16),rgba(255,255,255,.035)) !important;
-    background-repeat:no-repeat,no-repeat,no-repeat !important;
-    background-position:center,center,center !important;
-    background-size:23px 23px,cover,cover !important;
-    border-color:rgba(253,108,152,.46) !important;
-    box-shadow:0 0 13px rgba(253,108,152,.32), inset 0 1px 0 rgba(255,255,255,.16) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details:has(.filter-anchor-status) div[data-testid="stExpanderContent"]{{
-    padding:10px 12px 12px 12px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details:has(.filter-anchor-status) .filter-mini-note{{
-    margin:5px 0 8px 0 !important;
-    color:#BDEFFF !important;
-    font-size:10px !important;
-    line-height:1.15 !important;
-    letter-spacing:.02em !important;
-    opacity:.82 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details:has(.filter-anchor-status) div[data-testid="stCheckbox"]{{
-    margin:5px 0 !important;
-    padding:0 !important;
-    background:transparent !important;
-    border:0 !important;
-    box-shadow:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details:has(.filter-anchor-status) div[data-testid="stCheckbox"] label{{
-    min-height:34px !important;
-    height:34px !important;
-    padding:0 10px !important;
-    gap:8px !important;
-    border-radius:9px !important;
-    border:1px solid rgba(46,203,242,.36) !important;
-    background:linear-gradient(135deg,rgba(7,18,34,.92),rgba(4,10,20,.98)) !important;
-    box-shadow:
-        inset 0 1px 0 rgba(255,255,255,.06),
-        0 8px 16px rgba(0,0,0,.20) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stExpander"] details:has(.filter-anchor-status) div[data-testid="stCheckbox"] label p{{
-    font-size:10.5px !important;
-    font-weight:950 !important;
-    letter-spacing:0 !important;
-    line-height:1 !important;
-    white-space:nowrap !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="Cumple"])::before{{
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2347E190' stroke-width='2.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5 9.4 17 19 7'/%3E%3C/svg%3E") !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="No cumple"])::before{{
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FD6C98' stroke-width='2.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 7l10 10M17 7 7 17'/%3E%3C/svg%3E") !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="Reclamo"])::before{{
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FF3D00' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3 22 20H2L12 3Z'/%3E%3Cpath d='M12 9v5M12 17h.01'/%3E%3C/svg%3E") !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="Cumple"])::before,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="No cumple"])::before,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input[aria-label="Reclamo"])::before{{
-    flex:0 0 20px !important;
-    width:20px !important;
-    height:20px !important;
-    border-radius:7px !important;
-    background-size:13px 13px !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:has(input[aria-label="Cumple"][aria-checked="true"]) label{{
-    border-color:rgba(71,225,144,.74) !important;
-    background:linear-gradient(135deg,rgba(71,225,144,.20),rgba(6,18,34,.96)) !important;
-    box-shadow:inset 3px 0 0 {VERDE}, 0 0 16px rgba(71,225,144,.18), 0 8px 16px rgba(0,0,0,.20) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:has(input[aria-label="No cumple"][aria-checked="true"]) label{{
-    border-color:rgba(253,108,152,.74) !important;
-    background:linear-gradient(135deg,rgba(253,108,152,.20),rgba(6,18,34,.96)) !important;
-    box-shadow:inset 3px 0 0 {ROSADO}, 0 0 16px rgba(253,108,152,.18), 0 8px 16px rgba(0,0,0,.20) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:has(input[aria-label="Reclamo"][aria-checked="true"]) label{{
-    border-color:rgba(255,61,0,.74) !important;
-    background:linear-gradient(135deg,rgba(255,61,0,.18),rgba(6,18,34,.96)) !important;
-    box-shadow:inset 3px 0 0 {NARANJO}, 0 0 16px rgba(255,61,0,.18), 0 8px 16px rgba(0,0,0,.20) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:has(input[aria-checked="false"]) label{{
-    opacity:.42 !important;
-    filter:saturate(.45) brightness(.82) !important;
-    border-color:rgba(100,116,139,.28) !important;
-    background:linear-gradient(135deg,rgba(5,12,24,.62),rgba(2,6,12,.90)) !important;
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.03) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:has(input[aria-checked="false"]) label p,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:has(input[aria-checked="false"]) label span{{
-    color:#7F90A8 !important;
-    text-shadow:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:has(input[aria-checked="false"]) label::before{{
-    opacity:.52 !important;
-    border-color:rgba(100,116,139,.36) !important;
-    background-color:rgba(3,8,16,.76) !important;
-    box-shadow:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:has(input[aria-checked="true"]) label{{
-    opacity:1 !important;
-    filter:none !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:has(input[aria-checked="true"]) label p,
-section[data-testid="stSidebar"] div[data-testid="stCheckbox"]:has(input[aria-checked="true"]) label span{{
-    color:#FFFFFF !important;
-    text-shadow:0 0 9px rgba(46,203,242,.28) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stPills"]{{
-    width:100% !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stPills"] div[role="group"]{{
-    display:flex !important;
-    flex-wrap:wrap !important;
-    gap:8px !important;
-}}
-
-section[data-testid="stSidebar"] button[data-testid="stBaseButton-pillsActive"]{{
-    min-height:34px !important;
-    border-radius:9px !important;
-    border:1px solid rgba(46,203,242,.72) !important;
-    background:
-        linear-gradient(135deg,rgba(46,203,242,.24),rgba(71,225,144,.18)),
-        linear-gradient(180deg,rgba(12,31,49,.98),rgba(5,13,25,.96)) !important;
-    color:#FFFFFF !important;
-    font-weight:900 !important;
-    letter-spacing:0 !important;
-    box-shadow:
-        inset 3px 0 0 {CELESTE},
-        inset 0 1px 0 rgba(255,255,255,.12),
-        0 0 14px rgba(46,203,242,.28),
-        0 8px 18px rgba(2,6,23,.22) !important;
-    text-shadow:0 0 9px rgba(46,203,242,.32) !important;
-}}
-
-section[data-testid="stSidebar"] button[data-testid="stBaseButton-pills"]{{
-    min-height:34px !important;
-    border-radius:9px !important;
-    border:1px solid rgba(100,116,139,.34) !important;
-    background:linear-gradient(135deg,rgba(5,12,24,.66),rgba(2,6,12,.90)) !important;
-    color:#7F90A8 !important;
-    font-weight:800 !important;
-    opacity:.62 !important;
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.03) !important;
-}}
-
-section[data-testid="stSidebar"] button[data-testid="stBaseButton-pills"]:hover{{
-    opacity:.9 !important;
-    border-color:rgba(46,203,242,.54) !important;
-    color:#D7F7FF !important;
-}}
-
-/* Overrides de rendimiento: sidebar y navegacion quietos; el vidrio dinamico queda solo en graficos. */
-
-html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"]{{
-    scroll-behavior:auto !important;
-}}
-
-[data-baseweb="tab-highlight"],
-[data-baseweb="radio"] *,
-[data-testid="stRadio"] *,
-[data-testid="stSelectbox"] *,
-.stApp,
-div[data-testid="stAppViewContainer"] > .main .block-container::before,
-.linea-titulo,
-.kpi-divider,
-section[data-testid="stSidebar"] *,
-section[data-testid="stSidebar"],
-section[data-testid="stSidebar"]::before,
-section[data-testid="stSidebar"]::after,
-.filter-section-label,
-.filter-section-label::after,
-div[role="radiogroup"][aria-label="Selector KPI"] label:has(input:checked)::after,
-.control-glass,
-.control-glass::before,
-.control-glass::after,
-.metric-card,
-.metric-card::before,
-.metric-card::after,
-.ai-insight-card,
-.ai-insight-card::before,
-.ai-insight-card::after,
-.sidebar-export-card,
-.sidebar-export-card::before,
-.sidebar-export-card::after{{
-    animation:none !important;
-    transition:none !important;
-}}
-
-.control-glass,
-.control-glass::before,
-.control-glass::after,
-.metric-card,
-.ai-insight-card,
-.sidebar-export-card,
-[data-testid="stSidebar"] [data-baseweb="select"] > div{{
-    backdrop-filter:none !important;
-    -webkit-backdrop-filter:none !important;
-}}
-
-@keyframes chartGlassSweepStaticPage{{
-    0%{{ transform:translateX(-115%) skewX(-13deg); opacity:.04; }}
-    42%{{ opacity:.16; }}
-    100%{{ transform:translateX(115%) skewX(-13deg); opacity:.04; }}
-}}
-
-div[data-testid="stPlotlyChart"]{{
-    position:relative !important;
-    overflow:hidden !important;
-    border-radius:16px !important;
-}}
-
-div[data-testid="stPlotlyChart"]::before{{
-    content:"" !important;
-    position:absolute !important;
-    inset:0 !important;
-    pointer-events:none !important;
-    z-index:8 !important;
-    background:
-        linear-gradient(105deg,transparent 0 32%,rgba(255,255,255,.10) 44%,rgba(46,203,242,.10) 50%,transparent 64%),
-        radial-gradient(circle at 72% 18%,rgba(253,108,152,.08),transparent 28%) !important;
-    mix-blend-mode:screen !important;
-    animation:chartGlassSweepStaticPage 12s linear infinite !important;
-}}
-
-@media (prefers-reduced-motion:reduce){{
-    div[data-testid="stPlotlyChart"]::before{{
-        animation:none !important;
-        opacity:.08 !important;
-    }}
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stSelectbox"]{{
-    margin:12px 0 26px 0 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-testid="stSelectbox"] > label{{
-    margin:0 0 8px 0 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-baseweb="select"] > div{{
-    min-height:64px !important;
-    border-radius:9px !important;
-    border:1px solid rgba(253,108,152,.58) !important;
-    background:
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FD6C98' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='7.5' r='3.2'/%3E%3Cpath d='M5.5 20c.8-4.4 3.2-6.5 6.5-6.5s5.7 2.1 6.5 6.5'/%3E%3C/svg%3E"),
-        radial-gradient(circle at 82% 34%,rgba(253,108,152,.32),transparent 30%),
-        linear-gradient(135deg,rgba(253,108,152,.20),rgba(46,203,242,.08)),
-        linear-gradient(180deg,rgba(11,17,32,.96),rgba(7,9,21,.98)) !important;
-    background-repeat:no-repeat,no-repeat,no-repeat,no-repeat !important;
-    background-position:17px center,center,center,center !important;
-    background-size:24px 24px,cover,cover,cover !important;
-    padding-left:54px !important;
-    box-shadow:
-        inset 3px 0 0 {ROSADO},
-        inset 0 1px 0 rgba(255,255,255,.12),
-        0 12px 28px rgba(2,6,23,.38),
-        0 0 16px rgba(253,108,152,.24) !important;
-}}
-
-section[data-testid="stSidebar"] div[data-baseweb="select"] span,
-section[data-testid="stSidebar"] div[data-baseweb="select"] input{{
-    color:#FFFFFF !important;
-    font-weight:900 !important;
-    letter-spacing:0 !important;
-}}
-
-section[data-testid="stSidebar"] div[data-baseweb="select"] svg{{
-    fill:{CELESTE} !important;
-}}
-
-section[data-testid="stSidebar"] label p{{
-    color:#BDEFFF !important;
-    font-weight:900 !important;
-    letter-spacing:.02em !important;
-    text-transform:uppercase !important;
-}}
-
-section[data-testid="stSidebar"] .sidebar-export-card,
-section[data-testid="stSidebar"]:has(.filter-anchor-client) .sidebar-export-card,
-section[data-testid="stSidebar"]:has(details[open]) .sidebar-export-card,
-section[data-testid="stSidebar"]:has(.filter-anchor-client):has(details[open]) .sidebar-export-card,
-section[data-testid="stSidebar"] div[data-testid="stDownloadButton"],
-section[data-testid="stSidebar"]:has(.filter-anchor-client) div[data-testid="stDownloadButton"],
-section[data-testid="stSidebar"]:has(details[open]) div[data-testid="stDownloadButton"],
-section[data-testid="stSidebar"]:has(.filter-anchor-client):has(details[open]) div[data-testid="stDownloadButton"]{{
-    position:relative !important;
-    left:auto !important;
-    bottom:auto !important;
-    width:230px !important;
-    margin:18px 0 34px 0 !important;
-    z-index:5 !important;
-}}
-
-</style>
-""", unsafe_allow_html=True)
+CSS_PATH = ASSETS_DIR / "panel.css"
+
+
+@st.cache_data(show_spinner=False)
+def cargar_css_panel(ruta_css, version_css):
+    css = Path(ruta_css).read_text(encoding="utf-8")
+    reemplazos = {
+        "__LOGO_ECC_ICONO_DATA__": LOGO_ECC_ICONO_DATA,
+        "__AZUL_CLARO__": AZUL_CLARO,
+        "__AZUL__": AZUL,
+        "__CELESTE__": CELESTE,
+        "__NARANJO__": NARANJO,
+        "__ROSADO__": ROSADO,
+        "__VERDE__": VERDE,
+    }
+    for token, valor in reemplazos.items():
+        css = css.replace(token, valor)
+    return css
+
+
+CSS_VERSION = CSS_PATH.stat().st_mtime_ns if CSS_PATH.exists() else 0
+st.markdown(
+    f"<style>{cargar_css_panel(str(CSS_PATH), CSS_VERSION)}</style>",
+    unsafe_allow_html=True,
+)
 
 # =========================================================
 # ORDEN MESES
@@ -5445,10 +484,14 @@ def resumen_meses_reclamos_para_filtro(df_base):
 @st.cache_data
 def cargar(ruta_archivo, version_archivo):
     ruta = Path(ruta_archivo)
-    if not ruta.exists():
+    ruta_parquet = ruta.with_suffix(".parquet")
+    usar_parquet = ruta_parquet.exists() and (
+        not ruta.exists() or ruta_parquet.stat().st_mtime_ns >= ruta.stat().st_mtime_ns
+    )
+    if not ruta.exists() and not usar_parquet:
         return pd.DataFrame()
 
-    df = pd.read_excel(ruta)
+    df = pd.read_parquet(ruta_parquet) if usar_parquet else pd.read_excel(ruta)
     df = corregir_region_por_ciudad(df, "Ciudad", "Estado")
 
     if "Mes" in df.columns:
@@ -5469,9 +512,13 @@ def version_archivo(ruta_archivo):
 
 def version_archivo_opcional(ruta_archivo):
     ruta = Path(ruta_archivo)
-    if not ruta.exists():
+    rutas = [ruta]
+    if ruta.suffix.lower() in {".xlsx", ".xlsm", ".xls"}:
+        rutas.append(ruta.with_suffix(".parquet"))
+    existentes = [path for path in rutas if path.exists()]
+    if not existentes:
         return "missing"
-    return version_archivo(ruta)
+    return "|".join(f"{path.name}:{version_archivo(path)}" for path in existentes)
 
 
 def ruta_epa_activa(servicio=None):
@@ -5697,11 +744,13 @@ def clasificar_reclamo_operacional_panel(texto):
     return {"familia": "", "motivo": "", "severidad": ""}
 
 
+@lru_cache(maxsize=8192)
 def region_operacional_desde_texto(texto, region_actual=""):
     region = region_por_ciudad_o_comuna(texto, region_actual)
     return region if region else "Sin zona"
 
 
+@lru_cache(maxsize=8192)
 def cliente_desde_texto_panel(texto):
     limpio = normalizar_texto_operacional(texto)
     if not limpio:
@@ -5720,6 +769,7 @@ def cliente_desde_texto_panel(texto):
     return "Sin dato"
 
 
+@lru_cache(maxsize=32768)
 def normalizar_ticket_panel(valor):
     texto = str(valor or "").strip().upper()
     if not texto or texto.lower() == "nan":
@@ -5733,6 +783,7 @@ def normalizar_ticket_panel(valor):
     return ticket_norm
 
 
+@lru_cache(maxsize=8192)
 def cliente_panel_desde_valor(valor):
     texto = str(valor or "").strip()
     if not texto or texto.lower() == "nan":
@@ -5790,7 +841,14 @@ def mapa_zonas_atenciones_panel(df_atenciones):
         columnas.append("servicio_tecnico")
 
     for _, row in df_atenciones[columnas].fillna("").iterrows():
-        region = region_operacional_desde_texto(row.get("Ciudad", ""), row.get("Estado", ""))
+        region_actual = str(row.get("Estado") or "").strip()
+        if region_actual.lower() not in {"", "sin zona", "sin dato", "nan"}:
+            region = region_actual
+        else:
+            region = region_operacional_desde_texto(
+                str(row.get("Ciudad", "")),
+                region_actual,
+            )
         ciudad = str(row.get("Ciudad") or "").strip() or "Sin dato"
         if not region or region == "Sin zona":
             continue
@@ -5805,11 +863,11 @@ def mapa_zonas_atenciones_panel(df_atenciones):
     return mapa
 
 
-def completar_cliente_desde_atenciones_panel(df_base, df_atenciones):
+def completar_cliente_desde_atenciones_panel(df_base, df_atenciones, mapa=None):
     if df_base is None or df_base.empty or "cliente" not in df_base.columns:
         return df_base
 
-    mapa = mapa_clientes_atenciones_panel(df_atenciones)
+    mapa = mapa if mapa is not None else mapa_clientes_atenciones_panel(df_atenciones)
     if not mapa:
         return df_base
 
@@ -5840,11 +898,11 @@ def completar_cliente_desde_atenciones_panel(df_base, df_atenciones):
     return base
 
 
-def completar_zona_desde_atenciones_panel(df_base, df_atenciones):
+def completar_zona_desde_atenciones_panel(df_base, df_atenciones, mapa=None):
     if df_base is None or df_base.empty:
         return df_base
 
-    mapa = mapa_zonas_atenciones_panel(df_atenciones)
+    mapa = mapa if mapa is not None else mapa_zonas_atenciones_panel(df_atenciones)
     if not mapa:
         return df_base
 
@@ -6179,6 +1237,13 @@ def cargar_disponibilidad(ruta_cache, version_cache):
     ]:
         df_disp[col] = serie_texto_limpio(df_disp[col])
 
+    region_respaldo = df_disp["region"].where(df_disp["region"].ne(""), df_disp["zona"])
+    df_disp["region"] = [
+        region_por_ciudad_o_comuna(ciudad, region)
+        for ciudad, region in zip(df_disp["ciudad"], region_respaldo)
+    ]
+    df_disp["zona"] = df_disp["region"]
+
     df_disp = completar_cliente_panel(
         df_disp,
         [
@@ -6307,7 +1372,7 @@ def cargar_epa(ruta_db, version_db):
             )
             region_expr = "a.region" if "region" in columnas_atenciones else "'' AS region"
 
-            return pd.read_sql_query(
+            base_epa = pd.read_sql_query(
                 f"""
                 SELECT
                     a.proveedor,
@@ -6340,6 +1405,9 @@ def cargar_epa(ruta_db, version_db):
                 """,
                 con,
             )
+            if "region" in base_epa.columns:
+                base_epa["region"] = base_epa["region"].map(normalizar_region_chile)
+            return base_epa
     except Exception:
         return pd.DataFrame(columns=columnas)
 
@@ -6434,26 +1502,29 @@ def crear_excel_filtrado(df_export, filtros_export, sheet_name="Datos filtrados"
         columns=["Campo", "Valor"]
     )
 
-    with pd.ExcelWriter(salida, engine="openpyxl") as writer:
+    with pd.ExcelWriter(salida, engine="xlsxwriter") as writer:
         df_excel.to_excel(writer, sheet_name=sheet_name, index=False)
         control.to_excel(writer, sheet_name="Control interno", index=False)
 
         libro = writer.book
-        libro.properties.creator = APP_OWNER
-        libro.properties.title = titulo
-        libro.properties.subject = APP_SIGNATURE
+        libro.set_properties({
+            "author": APP_OWNER,
+            "title": titulo,
+            "subject": APP_SIGNATURE,
+        })
 
         hoja = writer.sheets[sheet_name]
-        hoja.freeze_panes = "A2"
-        hoja.auto_filter.ref = hoja.dimensions
+        hoja.freeze_panes(1, 0)
+        if len(df_excel.columns):
+            hoja.autofilter(0, 0, len(df_excel), len(df_excel.columns) - 1)
 
-        for col_cells in hoja.columns:
-            encabezado = str(col_cells[0].value) if col_cells[0].value is not None else ""
+        for indice, columna in enumerate(df_excel.columns):
+            encabezado = str(columna)
             ancho = min(max(len(encabezado) + 4, 12), 42)
-            hoja.column_dimensions[col_cells[0].column_letter].width = ancho
+            hoja.set_column(indice, indice, ancho)
 
         hoja_control = writer.sheets["Control interno"]
-        hoja_control.sheet_state = "hidden"
+        hoja_control.hide()
 
     salida.seek(0)
     return salida.getvalue()
@@ -6608,6 +1679,12 @@ def cargar_uso_herramienta(ruta_archivo, version_archivo):
     df_uso["puntaje_total"] = df_uso["puntaje_total"].map(nota_uso_desde_pct)
     df_uso["st"] = df_uso["st"].fillna("Sin clasificar").astype(str).str.strip().str.upper().replace({"": "Sin clasificar"})
     df_uso["servicio_tecnico"] = df_uso["st"]
+    if "region_atendida" in df_uso.columns:
+        ciudades = df_uso["ciudad"] if "ciudad" in df_uso.columns else pd.Series("", index=df_uso.index)
+        df_uso["region_atendida"] = [
+            region_por_ciudad_o_comuna(ciudad, region)
+            for ciudad, region in zip(ciudades.fillna(""), df_uso["region_atendida"].fillna(""))
+        ]
     return df_uso
 
 
@@ -6621,6 +1698,46 @@ def cargar_uso_herramienta_servicios(servicios):
         if SERVICIOS_CONFIG[servicio].get("participa_uso_herramienta", True)
     }
     return base.loc[base["st"].isin(servicios_validos)].copy()
+
+
+def versiones_bases_panel(servicios):
+    rutas = [APP_DIR / "USO_HERRAMIENTA_OT_2026.csv"]
+    for servicio in servicios:
+        config = SERVICIOS_CONFIG[servicio]
+        rutas.append(APP_DIR / str(config["archivo"]))
+        if config.get("disponibilidad"):
+            rutas.append(APP_DIR / str(config["disponibilidad"]))
+        if config.get("reclamos"):
+            rutas.append(APP_DIR / str(config["reclamos"]))
+        rutas.append(ruta_epa_activa(servicio))
+    return tuple((str(ruta), version_archivo_opcional(ruta)) for ruta in rutas)
+
+
+@st.cache_resource(show_spinner=False, max_entries=8)
+def cargar_bases_preparadas(servicios, versiones):
+    del versiones  # solo invalida el cache cuando cambia una fuente
+    servicios = list(servicios)
+    atenciones = cargar_atenciones_servicios(servicios)
+    epa = cargar_epa_servicios(servicios)
+    disponibilidad = cargar_disponibilidad_servicios(servicios)
+    disponibilidad = normalizar_coordinadores_sao_panel(disponibilidad)
+    reclamos = cargar_reclamos_servicios(servicios)
+    mapa_clientes = mapa_clientes_atenciones_panel(atenciones)
+    mapa_zonas = mapa_zonas_atenciones_panel(atenciones)
+    disponibilidad = completar_cliente_desde_atenciones_panel(disponibilidad, atenciones, mapa_clientes)
+    reclamos = completar_cliente_desde_atenciones_panel(reclamos, atenciones, mapa_clientes)
+    disponibilidad = completar_zona_desde_atenciones_panel(disponibilidad, atenciones, mapa_zonas)
+    reclamos = completar_zona_desde_atenciones_panel(reclamos, atenciones, mapa_zonas)
+    reclamos = deduplicar_reclamos_ticket_familia_panel(reclamos)
+    uso_herramienta = cargar_uso_herramienta_servicios(servicios)
+    return atenciones, epa, disponibilidad, reclamos, uso_herramienta
+
+
+def filtrar_base_por_servicios(base, servicios):
+    if base is None or base.empty or "servicio_tecnico" not in base.columns:
+        return base
+    servicios_validos = set(servicios)
+    return base.loc[base["servicio_tecnico"].isin(servicios_validos)].copy()
 
 
 def preparar_export_uso_herramienta(df_uso_base):
@@ -6682,49 +1799,38 @@ def preparar_vista_reclamos_limpia(df_reclamos_export):
 
 def render_boton_revisitas(df_revisitas, filtros_export):
     nombre_archivo = f"revisitas_filtradas_entel_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-    excel_b64 = base64.b64encode(crear_excel_filtrado(df_revisitas, filtros_export)).decode("ascii")
-    st.markdown(
-        f"""
-        <div class="revisita-export-shell">
-            <a class="revisita-download-icon"
-               href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{excel_b64}"
-               download="{nombre_archivo}"
-               title="Descargar revisitas filtradas"
-               aria-label="Descargar revisitas filtradas">
-                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M12 4v10"></path>
-                    <path d="m7.5 9.8 4.5 4.5 4.5-4.5"></path>
-                    <path d="M5 18.5h14"></path>
-                </svg>
-            </a>
-        </div>
-        """,
-        unsafe_allow_html=True
+    st.download_button(
+        "Descargar revisitas",
+        data=lambda: crear_excel_filtrado(df_revisitas, filtros_export),
+        file_name=nombre_archivo,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="descargar_revisitas_filtradas",
+        help="Descargar revisitas filtradas",
+        on_click="ignore",
+        type="tertiary",
+        icon=":material/download:",
+        width="stretch",
     )
 
 
 def render_boton_exportar_epa_revision(df_epa_export, filtros_export):
     nombre_archivo = f"epa_filtrada_entel_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-    excel_b64 = base64.b64encode(
-        crear_excel_filtrado(df_epa_export, filtros_export, "EPA filtrada", "Vista filtrada EPA Entel")
-    ).decode("ascii")
-    st.markdown(
-        f"""
-        <div class="revisita-export-shell">
-            <a class="revisita-download-icon"
-               href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{excel_b64}"
-               download="{nombre_archivo}"
-               title="Descargar EPA filtrada"
-               aria-label="Descargar EPA filtrada">
-                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M12 4v10"></path>
-                    <path d="m7.5 9.8 4.5 4.5 4.5-4.5"></path>
-                    <path d="M5 18.5h14"></path>
-                </svg>
-            </a>
-        </div>
-        """,
-        unsafe_allow_html=True
+    st.download_button(
+        "Descargar EPA",
+        data=lambda: crear_excel_filtrado(
+            df_epa_export,
+            filtros_export,
+            "EPA filtrada",
+            "Vista filtrada EPA Entel",
+        ),
+        file_name=nombre_archivo,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="descargar_epa_revision",
+        help="Descargar EPA filtrada",
+        on_click="ignore",
+        type="tertiary",
+        icon=":material/download:",
+        width="stretch",
     )
 
 
@@ -6755,55 +1861,37 @@ def render_boton_exportar_datos(df_export, filtros_export, modo="datos"):
     titulo_link = "Exportar EPA filtrada" if es_epa else "Exportar disponibilidad filtrada" if es_disponibilidad else "Exportar reclamos filtrados" if es_reclamos else "Exportar auditoria OT filtrada" if es_uso_herramienta else "Exportar datos filtrados"
     kicker = "EPA filtrada" if es_epa else "KPI Disponibilidad" if es_disponibilidad else "KPI Reclamos" if es_reclamos else "KPI Uso Herramienta" if es_uso_herramienta else "Datos filtrados"
     texto_boton = "Exportar EPA" if es_epa else "Exportar disponibilidad" if es_disponibilidad else "Exportar reclamos" if es_reclamos else "Exportar OT" if es_uso_herramienta else "Exportar datos"
-    modo_anterior = st.session_state.get("_export_mode_rendered")
-    animar_modo = modo_anterior is not None and modo_anterior != modo
-    st.session_state["_export_mode_rendered"] = modo
-    clases_export = [
-        "sidebar-export-card",
-        "sidebar-export-card-epa" if es_epa else "sidebar-export-card-disponibilidad" if es_disponibilidad else "sidebar-export-card-data",
-    ]
-    if animar_modo:
-        clases_export.append("sidebar-export-card-animate")
-    clase_export = " ".join(clases_export)
-    excel_b64 = base64.b64encode(
-        crear_excel_filtrado(df_export, filtros_export, sheet_name, titulo_excel)
-    ).decode("ascii")
-    st.markdown(
-        f"""
-        <a class="{clase_export}"
-           href="data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{excel_b64}"
-           download="{nombre_archivo}"
-           title="{titulo_link}"
-           aria-label="{titulo_link}">
-            <span class="sidebar-export-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M12 3v10"></path>
-                    <path d="m7.5 8.8 4.5 4.5 4.5-4.5"></path>
-                    <path d="M5 17.5h14"></path>
-                    <path d="M7 20.5h10"></path>
-                </svg>
-            </span>
-            <span class="sidebar-export-text">
-                <span class="sidebar-export-kicker">{kicker}</span>
-                <span class="sidebar-export-title">{texto_boton}</span>
-            </span>
-        </a>
-        """,
-        unsafe_allow_html=True
+    st.download_button(
+        f"{kicker} · {texto_boton}",
+        data=lambda: crear_excel_filtrado(df_export, filtros_export, sheet_name, titulo_excel),
+        file_name=nombre_archivo,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=f"exportar_panel_{modo}",
+        help=titulo_link,
+        on_click="ignore",
+        type="primary",
+        icon=":material/download:",
+        width="stretch",
     )
 
-df = cargar_atenciones_servicios(SERVICIOS_ACTIVOS)
+SERVICIOS_CARGA = tuple(SERVICIOS_CONFIG) if MODO_GERENCIAL else tuple(SERVICIOS_ACTIVOS)
+(
+    df,
+    df_epa,
+    df_disponibilidad,
+    df_reclamos,
+    df_uso_herramienta,
+) = cargar_bases_preparadas(
+    SERVICIOS_CARGA,
+    versiones_bases_panel(SERVICIOS_CARGA),
+)
+if set(SERVICIOS_ACTIVOS) != set(SERVICIOS_CARGA):
+    df = filtrar_base_por_servicios(df, SERVICIOS_ACTIVOS)
+    df_epa = filtrar_base_por_servicios(df_epa, SERVICIOS_ACTIVOS)
+    df_disponibilidad = filtrar_base_por_servicios(df_disponibilidad, SERVICIOS_ACTIVOS)
+    df_reclamos = filtrar_base_por_servicios(df_reclamos, SERVICIOS_ACTIVOS)
+    df_uso_herramienta = filtrar_base_por_servicios(df_uso_herramienta, SERVICIOS_ACTIVOS)
 EPA_DB_ACTIVA = ruta_epa_activa(SERVICIOS_ACTIVOS[0])
-df_epa = cargar_epa_servicios(SERVICIOS_ACTIVOS)
-df_disponibilidad = cargar_disponibilidad_servicios(SERVICIOS_ACTIVOS)
-df_disponibilidad = normalizar_coordinadores_sao_panel(df_disponibilidad)
-df_reclamos = cargar_reclamos_servicios(SERVICIOS_ACTIVOS)
-df_disponibilidad = completar_cliente_desde_atenciones_panel(df_disponibilidad, df)
-df_reclamos = completar_cliente_desde_atenciones_panel(df_reclamos, df)
-df_disponibilidad = completar_zona_desde_atenciones_panel(df_disponibilidad, df)
-df_reclamos = completar_zona_desde_atenciones_panel(df_reclamos, df)
-df_reclamos = deduplicar_reclamos_ticket_familia_panel(df_reclamos)
-df_uso_herramienta = cargar_uso_herramienta_servicios(SERVICIOS_ACTIVOS)
 
 KPI_INICIO = "KPI Inicio Actividad"
 KPI_EPA = "KPI EPA Satisfacci\u00f3n"
@@ -6862,7 +1950,9 @@ with st.sidebar:
     if pagina_uso_herramienta_activa and not df_uso_herramienta.empty:
         df_filtros_base = df_uso_herramienta.rename(columns={"region_atendida": "Estado", "tecnico": "Recurso"}).copy()
 
-    regiones = sorted(df_filtros_base["Estado"].dropna().unique()) if "Estado" in df_filtros_base.columns else []
+    regiones = sorted(
+        df_filtros_base["Estado"].dropna().astype(str).str.strip().replace("", pd.NA).dropna().unique()
+    ) if "Estado" in df_filtros_base.columns else []
     tecnicos = sorted(
         t for t in df_filtros_base["Recurso"].dropna().unique()
         if not es_tecnico_demo(t)
@@ -6949,7 +2039,7 @@ with st.sidebar:
         )
         etiqueta = texto_limpiar if todos_activos else texto_activar
 
-        if st.button(etiqueta, use_container_width=True, key=key):
+        def aplicar_toggle():
             kpi_en_curso = st.session_state.get("kpi_activo", KPI_INICIO)
             nuevo_estado = not todos_activos
             for item in items:
@@ -6957,7 +2047,13 @@ with st.sidebar:
             st.session_state[f"{key}_empty_intent"] = not nuevo_estado
             if kpi_en_curso in KPI_OPCIONES:
                 st.session_state["kpi_activo"] = kpi_en_curso
-            st.rerun()
+
+        st.button(
+            etiqueta,
+            width="stretch",
+            key=key,
+            on_click=aplicar_toggle,
+        )
 
     def asegurar_filtro_con_seleccion(items, prefijo, key_toggle, permitir_vacio=True):
         if not items:
@@ -6993,13 +2089,20 @@ with st.sidebar:
         seleccion = list(st.session_state.get(key, items_lista))
         todos_activos = bool(items_lista) and set(seleccion) == set(items_lista)
         etiqueta = "Vaciar todo" if todos_activos else "Seleccionar todo"
-        if st.button(etiqueta, use_container_width=True, key=key_boton):
+
+        def aplicar_toggle():
             kpi_en_curso = st.session_state.get("kpi_activo", KPI_INICIO)
             st.session_state[key] = [] if todos_activos else items_lista
             st.session_state[f"{key}_empty_intent"] = todos_activos
             if kpi_en_curso in KPI_OPCIONES:
                 st.session_state["kpi_activo"] = kpi_en_curso
-            st.rerun()
+
+        st.button(
+            etiqueta,
+            width="stretch",
+            key=key_boton,
+            on_click=aplicar_toggle,
+        )
 
     def proteger_pills_vacios(seleccion, key):
         if seleccion:
@@ -7110,8 +2213,6 @@ with st.sidebar:
             )
             meses_sel = proteger_pills_vacios(meses_sel, "disp_mes_pills")
 
-        st.session_state["_client_filter_visible"] = False
-
     else:
         region=[]
         with st.expander("REGIÓN", expanded=False):
@@ -7177,7 +2278,6 @@ with st.sidebar:
                         meses_sel.append(m)
 
         clientes_sel = clientes_epa
-        cliente_filtro_saliendo = st.session_state.get("_client_filter_visible", False) and not pagina_epa_activa
         if pagina_epa_activa:
             clientes_sel = []
             with st.expander("CLIENTE", expanded=False):
@@ -7196,11 +2296,14 @@ with st.sidebar:
                     st.checkbox(c, key=f"cli_{c}")
 
                 clientes_sel = [c for c in clientes_epa if st.session_state.get(f"cli_{c}", False)]
-        elif cliente_filtro_saliendo:
-            st.markdown('<div class="client-filter-exit-shell"><span>CLIENTE</span></div>', unsafe_allow_html=True)
-        st.session_state["_client_filter_visible"] = pagina_epa_activa
-
     st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+
+VISTA_TECNICO_SOLICITADA = bool(
+    not pagina_disp_rec_activa
+    and tecnico
+    and "tecnicos_filtro" in locals()
+    and set(map(str, tecnico)) != set(map(str, tecnicos_filtro))
+)
 
 # =========================================================
 # FILTROS
@@ -7407,7 +2510,7 @@ if not df_uso_f.empty:
     if tecnico and "tecnico" in df_uso_f.columns:
         df_uso_f = df_uso_f.loc[df_uso_f["tecnico"].astype(str).isin(set(map(str, tecnico)))]
 
-    fecha_uso = pd.to_datetime(df_uso_f.get("fecha_atencion"), dayfirst=True, errors="coerce")
+    fecha_uso = pd.to_datetime(df_uso_f.get("fecha_atencion"), format="mixed", dayfirst=True, errors="coerce")
     df_uso_f["_fecha_uso"] = fecha_uso
     if meses_sel:
         mes_uso = fecha_uso.dt.month.map(lambda mes: MESES[int(mes) - 1] if pd.notna(mes) and 1 <= int(mes) <= 12 else None)
@@ -7645,7 +2748,7 @@ def preparar_visitas_ticket(df_base, estado_col_base=None):
     base.loc[sin_id, "_id_ticket_orden"] = "__SIN_ID__" + base.loc[sin_id, "_idx_original"].astype(str)
 
     if "Fecha de Agendamiento" in df_base.columns:
-        base["_fecha_orden"] = pd.to_datetime(df_base["Fecha de Agendamiento"], dayfirst=True, errors="coerce")
+        base["_fecha_orden"] = pd.to_datetime(df_base["Fecha de Agendamiento"], format="mixed", dayfirst=True, errors="coerce")
     else:
         base["_fecha_orden"] = pd.NaT
 
@@ -7844,6 +2947,89 @@ with c2:
             unsafe_allow_html=True
         )
 
+
+KPI_METODOLOGIA = {
+    KPI_INICIO: {
+        "color": CELESTE,
+        "titulo": "Cómo se mide Inicio de actividad",
+        "mide": "Puntualidad del inicio real de cada atención frente al comienzo de su ventana WFM.",
+        "formula": "Atenciones con Inicio − Ventana ≤ 15 min ÷ atenciones filtradas × 100",
+        "criterio": "Cumple si ambas horas son válidas y el técnico inicia antes de la ventana o hasta 15 minutos después. Meta: 80%.",
+        "fuente": "WFM 2026. Se aplican los filtros activos de ST, región, técnico y período.",
+    },
+    KPI_EPA: {
+        "color": VERDE,
+        "titulo": "Cómo se mide EPA Satisfacción",
+        "mide": "Proporción de encuestas respondidas cuya nota promedio de las cinco preguntas es 4 o 5.",
+        "formula": "Respuestas con promedio Q1:Q5 ≥ 4 ÷ respuestas completadas × 100",
+        "criterio": "Las encuestas pendientes se muestran aparte y no entran al denominador de satisfacción. Meta: 90%.",
+        "fuente": "Bases EPA IBM, SAO y ECC. Escala de cada pregunta: 1 a 5.",
+    },
+    KPI_USO_HERRAMIENTA: {
+        "color": NARANJO,
+        "titulo": "Cómo se mide Uso correcto de herramienta",
+        "mide": "Calidad documental de cada OT: identificación, detalle, equipos, activo fijo, redacción y evidencias aplicables.",
+        "formula": "Nota OT = 1 + (puntaje documental % × 6); resultado general = promedio de OT filtradas",
+        "criterio": f"Escala de 1 a 7. La meta {USO_HERRAMIENTA_META_PCT}% equivale a nota {USO_HERRAMIENTA_META_NOTA:.1f}; hallazgos incompletos reducen el puntaje.",
+        "fuente": "PDF de OT procesados desde PST, respetando ST, región, técnico y período.",
+    },
+    KPI_DISPONIBILIDAD: {
+        "color": ROSADO,
+        "titulo": "Cómo se mide Disponibilidad",
+        "mide": "Rapidez de respuesta del ST a solicitudes CECOM dentro del horario hábil operacional.",
+        "formula": f"Solicitudes respondidas en ≤ {DISPONIBILIDAD_SLA_MIN} min hábiles ÷ solicitudes medibles × 100",
+        "criterio": f"Una solicitud sin respuesta o sobre {DISPONIBILIDAD_SLA_MIN} minutos no cumple. Horario: lunes a viernes, 08:00–19:00. Meta: {DISPONIBILIDAD_META_PCT}%.",
+        "fuente": "Correos PST clasificados. Las reiteraciones se informan como fricción, sin duplicar la solicitud base.",
+    },
+    KPI_RECLAMOS: {
+        "color": AZUL_CLARO,
+        "titulo": "Cómo se mide Reclamos",
+        "mide": "Incidencia de señales operacionales —reclamos y reforzamientos— respecto de las atenciones asignadas.",
+        "formula": "Ratio = señales clasificadas ÷ atenciones asignadas × 100; cumplimiento = máx(0, 100 − ratio)",
+        "criterio": f"Meta de cumplimiento: {RECLAMOS_META_CUMPLIMIENTO_PCT}% —equivale a mantener el ratio de señales en ≤ {RECLAMOS_META_RATIO_INCUMPLIMIENTO_PCT}%—.",
+        "fuente": "PST + WFM. Los registros se depuran por ticket y familia para evitar duplicidades.",
+    },
+}
+
+
+def render_tarjeta_metodologia_kpi(kpi):
+    metodo = KPI_METODOLOGIA[kpi]
+    bloques = [
+        ("Qué mide", metodo["mide"], "01"),
+        ("Fórmula", metodo["formula"], "ƒx"),
+        ("Criterio", metodo["criterio"], "✓"),
+        ("Fuente", metodo["fuente"], "DB"),
+    ]
+    detalle_html = "".join(
+        f"""
+        <div class="kpi-method-item">
+            <span class="kpi-method-item-icon">{html.escape(icono)}</span>
+            <div>
+                <span class="kpi-method-item-label">{html.escape(etiqueta)}</span>
+                <p>{html.escape(str(texto))}</p>
+            </div>
+        </div>
+        """
+        for etiqueta, texto, icono in bloques
+    )
+    st.markdown(
+        f"""
+        <section class="kpi-method-card" style="--method-accent:{metodo['color']}">
+            <div class="kpi-method-heading">
+                <span class="kpi-method-main-icon">i</span>
+                <div>
+                    <span class="kpi-method-eyebrow">Metodología del indicador</span>
+                    <h3>{html.escape(metodo['titulo'])}</h3>
+                    <p>La lectura se recalcula automáticamente con los filtros activos.</p>
+                </div>
+            </div>
+            <div class="kpi-method-grid">{detalle_html}</div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 kpi_activo = st.radio(
     "Selector KPI",
     KPI_OPCIONES,
@@ -7860,6 +3046,7 @@ mostrar_kpi_reclamos = kpi_activo == KPI_RECLAMOS
 
 if mostrar_kpi_inicio:
     st.markdown('<div class="kpi-divider"></div>', unsafe_allow_html=True)
+    render_tarjeta_metodologia_kpi(KPI_INICIO)
 
 # =========================================================
 # # =========================================================
@@ -8161,7 +3348,7 @@ def kpi_card(container, tipo_icono, titulo, valor, subtitulo, color, indicador=N
 
         st.plotly_chart(
             fig_kpi,
-            use_container_width=True,
+            width="stretch",
             config=PLOTLY_CONFIG_SOLO_LECTURA
         )
 
@@ -8240,13 +3427,6 @@ def render_disponibilidad_kpi_cards(color_cumplimiento, disp_pct, disp_total, di
     ])
 
 
-def _texto_corto(valor, max_chars=150):
-    texto = str(valor or "").strip()
-    if len(texto) <= max_chars:
-        return texto
-    return texto[: max_chars - 3].rstrip() + "..."
-
-
 def construir_insights_disponibilidad_fallback(metricas):
     disp_total = int(metricas.get("disp_total", 0))
     disp_pct = float(metricas.get("disp_pct", 0))
@@ -8292,72 +3472,6 @@ def construir_insights_disponibilidad_fallback(metricas):
         {"indicador": "Reiteraciones", "titulo": titulo_reiteraciones, "cuerpo": cuerpo_reiteraciones, "tono": "mal" if disp_reit_cecom_total or disp_reiteraciones else "bien"},
         {"indicador": "Respuesta", "titulo": titulo_respuesta, "cuerpo": cuerpo_respuesta, "tono": "mal" if disp_sin_respuesta else "bien"},
     ]
-
-
-def construir_prompt_ollama_disponibilidad(metricas):
-    return f"""
-Eres gerente de operaciones de un dashboard Entel/{SERVICIO_TITULO}. Analiza los indicadores filtrados y devuelve SOLO JSON valido.
-Formato exacto: [
-  {{"indicador":"Cumplimiento KPI","titulo":"...","cuerpo":"...","tono":"bien|mal|accion"}},
-  {{"indicador":"Reiteraciones","titulo":"...","cuerpo":"...","tono":"bien|mal|accion"}},
-  {{"indicador":"Respuesta","titulo":"...","cuerpo":"...","tono":"bien|mal|accion"}}
-]
-Reglas: maximo 12 palabras en titulo, maximo 24 palabras en cuerpo, tono ejecutivo, concreto, sin markdown.
-Metricas: {json.dumps(metricas, ensure_ascii=False)}
-"""
-
-
-@st.cache_data(ttl=600, show_spinner=False)
-def consultar_ollama_analisis(prompt, modelo, endpoint):
-    try:
-        payload = json.dumps({
-            "model": modelo,
-            "prompt": prompt,
-            "stream": False,
-            "options": {"temperature": 0.15, "num_predict": 260},
-        }).encode("utf-8")
-        req = urlrequest.Request(
-            endpoint,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urlrequest.urlopen(req, timeout=6) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        return str(data.get("response", "")).strip()
-    except (OSError, TimeoutError, ValueError, urlerror.URLError, urlerror.HTTPError):
-        return ""
-
-
-def normalizar_insights_ollama(texto, fallback):
-    if not texto:
-        return fallback
-    try:
-        inicio = texto.find("[")
-        fin = texto.rfind("]")
-        if inicio >= 0 and fin > inicio:
-            texto = texto[inicio:fin + 1]
-        data = json.loads(texto)
-        if isinstance(data, dict):
-            data = data.get("insights", [])
-        if not isinstance(data, list):
-            return fallback
-
-        normalizados = []
-        for item, respaldo in zip(data[:3], fallback):
-            if not isinstance(item, dict):
-                normalizados.append(respaldo)
-                continue
-            indicador = _texto_corto(item.get("indicador") or respaldo["indicador"], 32)
-            titulo = _texto_corto(item.get("titulo") or respaldo["titulo"], 58)
-            cuerpo = _texto_corto(item.get("cuerpo") or respaldo["cuerpo"], 220)
-            tono = str(item.get("tono") or respaldo["tono"]).strip().lower()
-            if tono not in {"bien", "mal", "accion"}:
-                tono = respaldo["tono"]
-            normalizados.append({"indicador": indicador, "titulo": titulo, "cuerpo": cuerpo, "tono": tono})
-        return normalizados if len(normalizados) == 3 else fallback
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return fallback
 
 
 def render_analisis_disponibilidad(metricas):
@@ -8467,24 +3581,6 @@ def render_analisis_hoja(nombre_hoja, metricas, fallback):
             f'</div>'
         )
     st.markdown(f'<div class="ai-insight-grid">{"".join(html_cards)}</div>', unsafe_allow_html=True)
-
-
-def construir_prompt_ollama_hoja(nombre_hoja, metricas, fallback):
-    indicadores = [
-        {"indicador": item["indicador"], "tono_sugerido": item.get("tono", "accion")}
-        for item in fallback
-    ]
-    return f"""
-Eres gerente de operaciones de Entel/{SERVICIO_TITULO}. Analiza la hoja "{nombre_hoja}" y devuelve SOLO JSON valido.
-Formato exacto: [
-  {{"indicador":"...","titulo":"...","cuerpo":"...","tono":"bien|mal|accion"}},
-  {{"indicador":"...","titulo":"...","cuerpo":"...","tono":"bien|mal|accion"}},
-  {{"indicador":"...","titulo":"...","cuerpo":"...","tono":"bien|mal|accion"}}
-]
-Usa estos indicadores, en este orden: {json.dumps(indicadores, ensure_ascii=False)}
-Reglas: maximo 12 palabras en titulo, maximo 42 palabras en cuerpo, tono ejecutivo, concreto, sin markdown. Si la vista incluye Todo, compara proveedor contra proveedor y explica donde mejorar usando denominador, brecha contra meta, causa y siguiente accion.
-Metricas: {json.dumps(metricas, ensure_ascii=False)}
-"""
 
 
 def construir_insights_inicio_fallback(metricas):
@@ -9492,6 +4588,57 @@ def grafico_reclamos_motivo(df_base):
     return fig
 
 
+def grafico_reclamos_region(df_base):
+    if df_base.empty or "region" not in df_base.columns:
+        return figura_disponibilidad_vacia(f"Reclamos por región {SERVICIO_TITULO}")
+
+    base = df_base.copy()
+    base["region"] = base["region"].fillna("Sin zona").astype(str).str.strip().replace({"": "Sin zona"})
+    base["_alta"] = base["severidad_reclamo"].astype(str).str.upper().eq("ALTA") if "severidad_reclamo" in base.columns else False
+    resumen = (
+        base.groupby("region", dropna=False)
+        .agg(
+            reclamos=("region", "size"),
+            alta=("_alta", "sum"),
+            tickets=("ticket_principal", pd.Series.nunique),
+        )
+        .reset_index()
+        .sort_values(["reclamos", "alta"], ascending=[False, False])
+        .head(10)
+        .sort_values("reclamos", ascending=True)
+    )
+    if resumen.empty:
+        return figura_disponibilidad_vacia(f"Reclamos por región {SERVICIO_TITULO}")
+
+    fig = go.Figure(go.Bar(
+        x=resumen["reclamos"],
+        y=resumen["region"].map(lambda valor: nombre_corto_leyenda(valor, 34)),
+        orientation="h",
+        marker=dict(color=rgba(CELESTE, 0.80), line=dict(color=CELESTE, width=1.6)),
+        text=[f"{int(rec)} señales | {int(tkt)} tkt" for rec, tkt in zip(resumen["reclamos"], resumen["tickets"])],
+        textposition="outside",
+        cliponaxis=False,
+        customdata=resumen[["tickets", "alta"]].to_numpy(),
+        hovertemplate="%{y}<br>Señales: <b>%{x}</b><br>Tickets: <b>%{customdata[0]}</b><br>Severidad alta: <b>%{customdata[1]}</b><extra></extra>",
+    ))
+    fig.update_layout(
+        title=dict(
+            text="<b>Señales operacionales por región</b><br><span style='font-size:12px;color:#BDEFFF'>Reclamos y reforzamientos agrupados por zona normalizada</span>",
+            x=0.02,
+            xanchor="left",
+            font=dict(size=17, color="#DDFBFF", family="Segoe UI Semibold"),
+        ),
+        height=360,
+        margin=dict(l=208, r=126, t=82, b=42),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(6,18,34,0.74)",
+        hoverlabel=dict(bgcolor="rgba(6,18,34,0.96)", bordercolor="rgba(46,203,242,0.40)", font=dict(size=12, family="Segoe UI", color="#EAFBFF")),
+    )
+    fig.update_xaxes(title=None, rangemode="tozero", showgrid=True, gridcolor="rgba(143,239,255,0.14)", zeroline=False, tickfont=dict(size=12, color="#BDEFFF", family="Segoe UI Semibold"))
+    fig.update_yaxes(title=None, automargin=True, tickfont=dict(size=11, color="#EAFBFF", family="Segoe UI Semibold"))
+    return fig
+
+
 def grafico_reclamos_cliente(df_base):
     if df_base.empty or "cliente" not in df_base.columns:
         return figura_disponibilidad_vacia(f"Clientes con reclamos {SERVICIO_TITULO}")
@@ -9852,19 +4999,24 @@ def grafico_uso_herramienta_servicio(df_base):
 
 def grafico_uso_herramienta_dispersion_contextual(df_base, dimension="tecnico"):
     etiquetas = {
-        "servicio_tecnico": ("contratista", "Dispersion por contratista"),
-        "region_atendida": ("region", "Dispersion por region"),
-        "tecnico": ("tecnico", "Dispersion por tecnico"),
+        "servicio_tecnico": ("contratista", "Dispersión por contratista"),
+        "region_atendida": ("región", "Dispersión por región"),
+        "tecnico": ("técnico", "Dispersión por técnico"),
     }
     etiqueta, titulo = etiquetas.get(dimension, etiquetas["tecnico"])
+    subtitulo_contextual = (
+        "Vista técnica solicitada mediante el filtro de técnicos"
+        if dimension == "tecnico"
+        else "Vista por región; cambia a técnico solo cuando reduces explícitamente ese filtro"
+    )
     if df_base.empty or dimension not in df_base.columns:
         return figura_disponibilidad_vacia(titulo)
 
     base = df_base.copy()
     for col, default in [
         ("servicio_tecnico", "Sin dato"),
-        ("region_atendida", "Sin region"),
-        ("tecnico", "Sin tecnico"),
+        ("region_atendida", "Sin región"),
+        ("tecnico", "Sin técnico"),
         ("folio_ot", ""),
         ("ticket", ""),
         ("estado_calidad", ""),
@@ -9874,11 +5026,11 @@ def grafico_uso_herramienta_dispersion_contextual(df_base, dimension="tecnico"):
             base[col] = default
         base[col] = base[col].fillna(default).astype(str).str.strip().replace({"": default})
 
-    base["_fecha_graf"] = pd.to_datetime(base.get("fecha_atencion"), dayfirst=True, errors="coerce")
+    base["_fecha_graf"] = pd.to_datetime(base.get("fecha_atencion"), format="mixed", dayfirst=True, errors="coerce")
     base["_fecha_label"] = base["_fecha_graf"].dt.strftime("%d-%m-%Y").fillna("Sin fecha")
     base["_x_label"] = base[dimension].map(lambda valor: nombre_corto_leyenda(valor, 28 if dimension == "tecnico" else 34))
 
-    limite = 3 if dimension == "servicio_tecnico" else 14
+    limite = 3 if dimension == "servicio_tecnico" else 8 if dimension == "region_atendida" else 12
     top_dimension = (
         base.groupby(dimension, dropna=False)
         .agg(ots=(dimension, "size"), nota=("puntaje_total", "mean"))
@@ -9924,7 +5076,7 @@ def grafico_uso_herramienta_dispersion_contextual(df_base, dimension="tecnico"):
     fig.add_hline(y=USO_HERRAMIENTA_NOTA_CRITICA, line_dash="dot", line_width=2, line_color=ROSADO, annotation_text=f"Critico < {USO_HERRAMIENTA_NOTA_CRITICA}", annotation_position="bottom left")
     fig.update_layout(
         title=dict(
-            text=f"<b>{titulo}</b><br><span style='font-size:12px;color:#BDEFFF'>Regla contextual: Todo = contratistas | ST = regiones | region filtrada = tecnicos</span>",
+            text=f"<b>{titulo}</b><br><span style='font-size:12px;color:#BDEFFF'>{subtitulo_contextual}</span>",
             x=0.02,
             xanchor="left",
             font=dict(size=17, color="#DDFBFF", family="Segoe UI Semibold"),
@@ -9945,9 +5097,12 @@ def grafico_uso_herramienta_region(df_base):
     resumen = preparar_ranking_uso_region(df_base)
     if resumen.empty:
         return figura_disponibilidad_vacia("Ranking por region atendida")
-    resumen = resumen.sort_values(["nota_promedio", "ots"], ascending=[True, False]).head(14)
+    resumen = resumen.sort_values(["nota_promedio", "ots"], ascending=[True, False]).head(10)
     resumen["_label"] = resumen.apply(
-        lambda row: nombre_corto_leyenda(f"{row['region_atendida']} | {row['servicio_tecnico']}", 38),
+        lambda row: nombre_corto_leyenda(
+            f"{row['region_atendida']} | {row['servicio_tecnico']}" if SERVICIO_COMPARATIVO else row["region_atendida"],
+            38,
+        ),
         axis=1,
     )
     colores = [color_servicio_uso(servicio) for servicio in resumen["servicio_tecnico"]]
@@ -10038,6 +5193,7 @@ if mostrar_kpi_inicio:
 
 if mostrar_kpi_epa:
     st.markdown('<div class="kpi-divider"></div>', unsafe_allow_html=True)
+    render_tarjeta_metodologia_kpi(KPI_EPA)
 
     if True:
         render_kpi_card_grid([
@@ -10086,15 +5242,14 @@ if mostrar_kpi_epa:
             )
         )
 
-        titulo_barra_epa = "Promedio EPA por técnico"
+        titulo_barra_epa = "Promedio EPA por región"
         if len(df_epa_respondidas):
-            region_filtrada_epa = bool(region) and len(set(map(str, region))) < len(set(map(str, regiones)))
-            if region_filtrada_epa and "tecnico" in df_epa_respondidas.columns:
+            if VISTA_TECNICO_SOLICITADA and "tecnico" in df_epa_respondidas.columns:
                 dimension_barra_epa = "tecnico"
-            elif SERVICIO_COMPARATIVO and "servicio_tecnico" in df_epa_respondidas.columns:
-                dimension_barra_epa = "servicio_tecnico"
             elif "region" in df_epa_respondidas.columns:
                 dimension_barra_epa = "region"
+            elif SERVICIO_COMPARATIVO and "servicio_tecnico" in df_epa_respondidas.columns:
+                dimension_barra_epa = "servicio_tecnico"
             else:
                 dimension_barra_epa = "tecnico"
             titulo_barra_epa = (
@@ -10171,43 +5326,31 @@ if mostrar_kpi_epa:
             showlegend=False
         )
 
-        st.plotly_chart(gauge_epa, use_container_width=True, config=PLOTLY_CONFIG_SOLO_LECTURA)
+        st.plotly_chart(gauge_epa, width="stretch", config=PLOTLY_CONFIG_SOLO_LECTURA)
 
         if len(df_epa_respondidas):
-            if SERVICIO_COMPARATIVO and "servicio_tecnico" in df_epa_respondidas.columns:
-                dispersion_servicio = preparar_dispersion_epa(df_epa_respondidas, "servicio_tecnico")
-                if len(dispersion_servicio):
-                    st.plotly_chart(
-                        grafico_dispersion_epa(dispersion_servicio, "servicio_tecnico", "Promedio EPA en el tiempo por Servicio Técnico"),
-                        use_container_width=True,
-                        config=PLOTLY_CONFIG_SOLO_LECTURA
-                    )
-                else:
-                    st.info("No hay respuestas EPA con fecha y promedio para graficar por Servicio Técnico.")
+            if VISTA_TECNICO_SOLICITADA and "tecnico" in df_epa_respondidas.columns:
+                dimension_dispersion_epa = "tecnico"
+                titulo_dispersion_epa = "Promedio EPA en el tiempo por técnico seleccionado"
+            elif "region" in df_epa_respondidas.columns:
+                dimension_dispersion_epa = "region"
+                titulo_dispersion_epa = "Promedio EPA en el tiempo por región"
+            elif "servicio_tecnico" in df_epa_respondidas.columns:
+                dimension_dispersion_epa = "servicio_tecnico"
+                titulo_dispersion_epa = "Promedio EPA en el tiempo por Servicio Técnico"
             else:
-                dispersion_cliente = preparar_dispersion_epa(df_epa_respondidas, "cliente")
-                dispersion_tecnico = preparar_dispersion_epa(df_epa_respondidas, "tecnico")
-                tab_cliente, tab_tecnico = st.tabs(["Dispersi\u00f3n por cliente", "Dispersi\u00f3n por t\u00e9cnico"])
+                dimension_dispersion_epa = "tecnico"
+                titulo_dispersion_epa = "Promedio EPA en el tiempo por técnico"
 
-                with tab_cliente:
-                    if len(dispersion_cliente):
-                        st.plotly_chart(
-                            grafico_dispersion_epa(dispersion_cliente, "cliente", "Promedio EPA en el tiempo por cliente"),
-                            use_container_width=True,
-                            config=PLOTLY_CONFIG_SOLO_LECTURA
-                        )
-                    else:
-                        st.info("No hay respuestas EPA con fecha y promedio para graficar por cliente.")
-
-                with tab_tecnico:
-                    if len(dispersion_tecnico):
-                        st.plotly_chart(
-                            grafico_dispersion_epa(dispersion_tecnico, "tecnico", "Promedio EPA en el tiempo por t\u00e9cnico"),
-                            use_container_width=True,
-                            config=PLOTLY_CONFIG_SOLO_LECTURA
-                        )
-                    else:
-                        st.info("No hay respuestas EPA con fecha y promedio para graficar por t\u00e9cnico.")
+            dispersion_epa = preparar_dispersion_epa(df_epa_respondidas, dimension_dispersion_epa)
+            if len(dispersion_epa):
+                st.plotly_chart(
+                    grafico_dispersion_epa(dispersion_epa, dimension_dispersion_epa, titulo_dispersion_epa),
+                    width="stretch",
+                    config=PLOTLY_CONFIG_SOLO_LECTURA,
+                )
+            else:
+                st.info("No hay respuestas EPA con fecha y promedio para graficar la vista seleccionada.")
 
         if not epa_total_atenciones:
             st.info("Aun no hay links EPA creados. Genera atenciones desde la carpeta EPA para alimentar este KPI.")
@@ -10220,13 +5363,14 @@ if mostrar_kpi_epa:
             with icon_col:
                 render_boton_exportar_epa_revision(df_epa_export, filtros_export)
 
-            st.dataframe(df_epa_export, use_container_width=True, hide_index=True)
+            st.dataframe(df_epa_export, width="stretch", hide_index=True)
         else:
             st.info("No hay registros EPA para revisar.")
 
 
 if mostrar_kpi_uso_herramienta:
     st.markdown('<div class="kpi-divider"></div>', unsafe_allow_html=True)
+    render_tarjeta_metodologia_kpi(KPI_USO_HERRAMIENTA)
 
     render_uso_herramienta_kpi_cards()
     render_analisis_uso_herramienta({
@@ -10245,18 +5389,10 @@ if mostrar_kpi_uso_herramienta:
     })
 
     if len(df_uso_f):
-        if SERVICIO_COMPARATIVO:
-            st.plotly_chart(
-                grafico_uso_herramienta_servicio(df_uso_f),
-                use_container_width=True,
-                config=PLOTLY_CONFIG_SOLO_LECTURA,
-            )
-
-        region_filtrada_uso = bool(region) and len(set(map(str, region))) < len(set(map(str, regiones)))
-        dimension_dispersion_uso = "tecnico" if (region_filtrada_uso or tecnico) else "servicio_tecnico" if SERVICIO_COMPARATIVO else "region_atendida"
+        dimension_dispersion_uso = "tecnico" if VISTA_TECNICO_SOLICITADA else "region_atendida"
         st.plotly_chart(
             grafico_uso_herramienta_dispersion_contextual(df_uso_f, dimension_dispersion_uso),
-            use_container_width=True,
+            width="stretch",
             config=PLOTLY_CONFIG_SOLO_LECTURA,
         )
 
@@ -10264,7 +5400,7 @@ if mostrar_kpi_uso_herramienta:
         with col_uso_region:
             st.plotly_chart(
                 grafico_uso_herramienta_region(df_uso_f),
-                use_container_width=True,
+                width="stretch",
                 config=PLOTLY_CONFIG_SOLO_LECTURA,
             )
         with col_uso_ranking:
@@ -10283,7 +5419,7 @@ if mostrar_kpi_uso_herramienta:
                 st.markdown('<div class="filter-mini-note">Ranking global por tecnico, ordenado por nota promedio y consistencia de OT.</div>', unsafe_allow_html=True)
                 st.dataframe(
                     ranking_vista[["#", "ST", "Tecnico", "Region", "OT", "Nota", "% OK", "Criticas"]],
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
             else:
@@ -10299,7 +5435,7 @@ if mostrar_kpi_uso_herramienta:
             columnas_detalle_uso = [col for col in columnas_detalle_uso if col in df_uso_export.columns]
             st.dataframe(
                 df_uso_export[columnas_detalle_uso].head(DISPONIBILIDAD_TABLA_MAX_FILAS),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
             if len(df_uso_export) > DISPONIBILIDAD_TABLA_MAX_FILAS:
@@ -10316,6 +5452,7 @@ if mostrar_kpi_uso_herramienta:
 
 if mostrar_kpi_disponibilidad:
     st.markdown('<div class="kpi-divider"></div>', unsafe_allow_html=True)
+    render_tarjeta_metodologia_kpi(KPI_DISPONIBILIDAD)
 
     if disponibilidad_no_aplica_servicio:
         render_estado_sin_datos(
@@ -10350,39 +5487,27 @@ if mostrar_kpi_disponibilidad:
                 "Base pendiente",
             )
         elif len(df_disp_f):
-            if SERVICIO_COMPARATIVO:
-                resumen_disp_servicio = preparar_resumen_mensual_disponibilidad_servicio(df_disp_f)
+            resumen_disp = preparar_resumen_mensual_disponibilidad(df_disp_f)
+            if len(resumen_disp):
                 st.plotly_chart(
-                    grafico_disponibilidad_mensual_servicio(resumen_disp_servicio),
-                    use_container_width=True,
-                    config=PLOTLY_CONFIG_SOLO_LECTURA,
-                )
-                st.plotly_chart(
-                    grafico_disponibilidad_servicio(df_disp_f),
-                    use_container_width=True,
+                    grafico_disponibilidad_mensual(resumen_disp),
+                    width="stretch",
                     config=PLOTLY_CONFIG_SOLO_LECTURA,
                 )
             else:
-                resumen_disp = preparar_resumen_mensual_disponibilidad(df_disp_f)
-                if len(resumen_disp):
-                    st.plotly_chart(
-                        grafico_disponibilidad_mensual(resumen_disp),
-                        use_container_width=True,
-                        config=PLOTLY_CONFIG_SOLO_LECTURA
-                    )
-                else:
-                    render_estado_sin_datos("No hay datos para mostrar", "No hay fechas de solicitud validas para graficar la tendencia mensual.")
-                st.plotly_chart(
-                    grafico_disponibilidad_region_operacional(df_disp_f),
-                    use_container_width=True,
-                    config=PLOTLY_CONFIG_SOLO_LECTURA
-                )
+                render_estado_sin_datos("No hay datos para mostrar", "No hay fechas de solicitud válidas para graficar la tendencia mensual.")
+            st.plotly_chart(
+                grafico_disponibilidad_region_operacional(df_disp_f),
+                width="stretch",
+                config=PLOTLY_CONFIG_SOLO_LECTURA,
+            )
         else:
             render_estado_sin_datos("No hay datos para mostrar", "Sin solicitudes de disponibilidad para los filtros seleccionados.")
 
 
 if mostrar_kpi_reclamos:
     st.markdown('<div class="kpi-divider"></div>', unsafe_allow_html=True)
+    render_tarjeta_metodologia_kpi(KPI_RECLAMOS)
 
     if reclamos_no_aplica_servicio:
         render_estado_sin_datos(
@@ -10429,39 +5554,19 @@ if mostrar_kpi_reclamos:
         })
 
         if len(df_reclamos_f):
-            if SERVICIO_COMPARATIVO:
-                col_rec_servicio, col_rec_cliente = st.columns([0.34, 0.66])
-                with col_rec_servicio:
-                    st.plotly_chart(
-                        grafico_reclamos_servicio(df_reclamos_f, df_atenciones_reclamos_f),
-                        use_container_width=True,
-                        config=PLOTLY_CONFIG_SOLO_LECTURA
-                    )
-                with col_rec_cliente:
-                    st.plotly_chart(
-                        grafico_reclamos_cliente(df_reclamos_f),
-                        use_container_width=True,
-                        config=PLOTLY_CONFIG_SOLO_LECTURA
-                    )
+            col_rec_motivo, col_rec_region = st.columns([0.48, 0.52])
+            with col_rec_motivo:
                 st.plotly_chart(
                     grafico_reclamos_motivo(df_reclamos_f),
-                    use_container_width=True,
-                    config=PLOTLY_CONFIG_SOLO_LECTURA
+                    width="stretch",
+                    config=PLOTLY_CONFIG_SOLO_LECTURA,
                 )
-            else:
-                col_rec_motivo, col_rec_cliente = st.columns([0.48, 0.52])
-                with col_rec_motivo:
-                    st.plotly_chart(
-                        grafico_reclamos_motivo(df_reclamos_f),
-                        use_container_width=True,
-                        config=PLOTLY_CONFIG_SOLO_LECTURA
-                    )
-                with col_rec_cliente:
-                    st.plotly_chart(
-                        grafico_reclamos_cliente(df_reclamos_f),
-                        use_container_width=True,
-                        config=PLOTLY_CONFIG_SOLO_LECTURA
-                    )
+            with col_rec_region:
+                st.plotly_chart(
+                    grafico_reclamos_region(df_reclamos_f),
+                    width="stretch",
+                    config=PLOTLY_CONFIG_SOLO_LECTURA,
+                )
 
             st.markdown(f'<div class="filter-mini-note">Detalle reclamos {SERVICIO_TITULO}: cliente, ticket y clasificacion homologada. El export conserva remitentes, asunto, extracto y evidencia completa.</div>', unsafe_allow_html=True)
             df_reclamos_vista = preparar_vista_reclamos_limpia(df_reclamos_export).head(DISPONIBILIDAD_TABLA_MAX_FILAS)
@@ -10470,7 +5575,7 @@ if mostrar_kpi_reclamos:
                     f'<div class="filter-mini-note">Mostrando {DISPONIBILIDAD_TABLA_MAX_FILAS} de {len(df_reclamos_export)} filas en pantalla. El export conserva la vista filtrada completa.</div>',
                     unsafe_allow_html=True,
                 )
-            st.dataframe(df_reclamos_vista, use_container_width=True, hide_index=True)
+            st.dataframe(df_reclamos_vista, width="stretch", hide_index=True)
         else:
             render_estado_sin_datos("No hay datos para mostrar", "Sin reclamos para los filtros seleccionados.")
 
@@ -10489,19 +5594,19 @@ if mostrar_kpi_inicio:
     dimension_graf_label = "Región"
     titulo_evolucion_inicio = "Evolución mensual de cumplimiento por región"
     subtitulo_evolucion_inicio = "Comparativo gerencial contra meta operacional Entel 80%"
-    if SERVICIO_COMPARATIVO and "servicio_tecnico" in df_graf_inicio.columns:
-        df_graf_inicio["_Servicio_Graf"] = (
-            df_graf_inicio["servicio_tecnico"]
-            .fillna("Sin ST")
+    if VISTA_TECNICO_SOLICITADA and "Recurso" in df_graf_inicio.columns:
+        df_graf_inicio["_Dimension_Graf"] = (
+            df_graf_inicio["Recurso"]
+            .fillna("Sin técnico")
             .astype(str)
             .str.strip()
-            .replace({"": "Sin ST"})
+            .replace({"": "Sin técnico"})
         )
-        estado_graf_col = "_Servicio_Graf"
-        dimension_graf_label = "Servicio Técnico"
-        titulo_evolucion_inicio = "Evolución mensual de cumplimiento por Servicio Técnico"
-        subtitulo_evolucion_inicio = "Comparativo ST vs ST contra meta operacional Entel 80%"
-    elif SERVICIO_ACTUAL == "SAO" and "Estado" in df_graf_inicio.columns:
+        estado_graf_col = "_Dimension_Graf"
+        dimension_graf_label = "Técnico"
+        titulo_evolucion_inicio = "Evolución mensual de técnicos seleccionados"
+        subtitulo_evolucion_inicio = "Vista técnica solicitada contra meta operacional Entel 80%"
+    elif "Estado" in df_graf_inicio.columns:
         regiones_top = (
             df_graf_inicio["Estado"]
             .dropna()
@@ -10510,15 +5615,16 @@ if mostrar_kpi_inicio:
             .replace("", pd.NA)
             .dropna()
             .value_counts()
-            .head(6)
+            .head(5)
             .index
             .tolist()
         )
-        df_graf_inicio["_Estado_Graf"] = df_graf_inicio["Estado"].where(
-            df_graf_inicio["Estado"].astype(str).isin(regiones_top),
-            "Otras regiones",
-        )
-        estado_graf_col = "_Estado_Graf"
+        if df_graf_inicio["Estado"].dropna().astype(str).nunique() > len(regiones_top):
+            df_graf_inicio["_Estado_Graf"] = df_graf_inicio["Estado"].where(
+                df_graf_inicio["Estado"].astype(str).isin(regiones_top),
+                "Otras regiones",
+            )
+            estado_graf_col = "_Estado_Graf"
 
     graf = (
         df_graf_inicio.groupby(["Mes", estado_graf_col])["Cumple"]
@@ -10626,7 +5732,7 @@ if mostrar_kpi_inicio:
 
     palette = CHART_PALETTE
     regiones_graf = list(graf["Estado"].dropna().unique())
-    mostrar_etiquetas_region = SERVICIO_COMPARATIVO or not (SERVICIO_ACTUAL == "SAO" and len(regiones_graf) > 4)
+    mostrar_etiquetas_region = len(regiones_graf) <= 4
 
     # Conectores de brecha mensual entre regiones: da lectura gerencial sin usar barras.
     pivot = (
@@ -10843,7 +5949,7 @@ if mostrar_kpi_inicio:
 
     st.plotly_chart(
         fig,
-        use_container_width=True,
+        width="stretch",
         config=PLOTLY_CONFIG_SOLO_LECTURA
     )
 
@@ -11018,7 +6124,7 @@ if mostrar_kpi_inicio:
     with left:
         st.plotly_chart(
             encabezado_plotly("Distribución de atenciones"),
-            use_container_width=True,
+            width="stretch",
             config=PLOTLY_CONFIG_SOLO_LECTURA
         )
 
@@ -11122,7 +6228,7 @@ if mostrar_kpi_inicio:
             uniformtext=dict(minsize=10, mode="hide")
         )
 
-        st.plotly_chart(pie, use_container_width=True, config=PLOTLY_CONFIG_SOLO_LECTURA)
+        st.plotly_chart(pie, width="stretch", config=PLOTLY_CONFIG_SOLO_LECTURA)
 
     with right:
         motivo_col = next(
@@ -11138,7 +6244,7 @@ if mostrar_kpi_inicio:
 
         st.plotly_chart(
             encabezado_plotly("Motivo de No Realizado"),
-            use_container_width=True,
+            width="stretch",
             config=PLOTLY_CONFIG_SOLO_LECTURA
         )
 
@@ -11180,7 +6286,7 @@ if mostrar_kpi_inicio:
                 showlegend=False
             )
 
-            st.plotly_chart(bar, use_container_width=True, config=PLOTLY_CONFIG_SOLO_LECTURA)
+            st.plotly_chart(bar, width="stretch", config=PLOTLY_CONFIG_SOLO_LECTURA)
         else:
             st.info("No hay motivos de no realización para los filtros aplicados.")
 
@@ -11189,14 +6295,14 @@ if mostrar_kpi_inicio:
     with estado_cards[0]:
         st.plotly_chart(
             kpi_plotly("Finalizadas", finalizadas, pct_fin, AZUL_CLARO, "✓", "Del total filtrado", compact=True),
-            use_container_width=True,
+            width="stretch",
             config=PLOTLY_CONFIG_SOLO_LECTURA
         )
 
     with estado_cards[1]:
         st.plotly_chart(
             kpi_plotly("No finalizadas", no_finalizadas, pct_no_fin, ROSADO, "!", "Del total filtrado", compact=True),
-            use_container_width=True,
+            width="stretch",
             config=PLOTLY_CONFIG_SOLO_LECTURA
         )
 
@@ -11211,7 +6317,7 @@ if mostrar_kpi_inicio:
                 "Base del gráfico de motivos",
                 compact=True
             ),
-            use_container_width=True,
+            width="stretch",
             config=PLOTLY_CONFIG_SOLO_LECTURA
         )
 
@@ -11228,7 +6334,7 @@ if mostrar_kpi_inicio:
                     "Del total filtrado",
                     compact=True
                 ),
-                use_container_width=True,
+                width="stretch",
                 config=PLOTLY_CONFIG_SOLO_LECTURA
             )
         with revisita_export_col:
