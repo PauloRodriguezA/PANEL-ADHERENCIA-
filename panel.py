@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
-from datetime import datetime
+from datetime import datetime, timedelta
 import unicodedata
 import base64
 import hashlib
@@ -13,6 +13,7 @@ import sqlite3
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from regiones_chile import corregir_region_por_ciudad, normalizar_region_chile, region_por_ciudad_o_comuna
 
 # =========================================================
@@ -172,7 +173,7 @@ SERVICIOS_ACTIVOS = list(SERVICIOS_CONFIG.keys()) if SERVICIO_COMPARATIVO else [
 SERVICIO_TITULO = "IBM + SAO + ECC" if SERVICIO_COMPARATIVO else SERVICIO_ACTUAL
 SERVICIO_CONFIG = SERVICIOS_CONFIG[SERVICIOS_ACTIVOS[0]]
 
-FILTROS_DEFAULT_VERSION = "2026-07-11-regiones-canonicas-v1"
+FILTROS_DEFAULT_VERSION = "2026-07-13-zona-tecnico-v3"
 servicio_anterior_filtros = st.session_state.get("_servicio_filtros_actual")
 reiniciar_filtros = (
     (servicio_anterior_filtros is not None and servicio_anterior_filtros != SERVICIO_ACTUAL)
@@ -181,13 +182,16 @@ reiniciar_filtros = (
 if reiniciar_filtros:
     claves_a_limpiar = [
         key for key in st.session_state.keys()
-        if key.startswith(("reg_", "tec_", "mes_", "cli_", "disp_cli_", "disp_zona_", "disp_coord_", "disp_estado_"))
+        if key.startswith(("reg_", "tec_", "mes_", "sem_", "cli_", "disp_cli_", "disp_zona_", "disp_coord_", "disp_estado_"))
         or key in {
             "disp_cli_pills", "disp_zona_pills", "disp_estado_pills", "disp_mes_pills",
+            "semana_pills", "disp_semana_pills",
             "toggle_clientes_disponibilidad_pills_empty_intent",
             "toggle_zonas_disponibilidad_pills_empty_intent",
             "toggle_estados_disponibilidad_pills_empty_intent",
             "toggle_meses_disponibilidad_pills_empty_intent",
+            "toggle_semanas_pills_empty_intent",
+            "toggle_semanas_disponibilidad_pills_empty_intent",
         }
         or key.endswith(("_empty_intent", "_force_all"))
     ]
@@ -367,6 +371,14 @@ MESES_CORTOS = {
     "Diciembre": "Dic",
 }
 
+ZONA_HORARIA_PANEL = ZoneInfo("America/Santiago")
+AHORA_PANEL = datetime.now(ZONA_HORARIA_PANEL).replace(tzinfo=None)
+HOY_PANEL = AHORA_PANEL.replace(hour=0, minute=0, second=0, microsecond=0)
+ANIO_PANEL = HOY_PANEL.year
+MESES_HASTA_HOY = MESES[:HOY_PANEL.month]
+MES_ACTUAL = MESES[HOY_PANEL.month - 1]
+MES_ACTUAL_CORTO = MESES_CORTOS[MES_ACTUAL]
+
 
 def normalizar_texto_mes(valor):
     """Normaliza textos de mes para que Ene, Enero, 01, 2026-01, etc. filtren igual."""
@@ -431,6 +443,68 @@ def ordenar_meses_operacionales(meses):
     return [mes for mes in MESES if mes in meses_set]
 
 
+def fechas_calendario(serie):
+    """Convierte fechas heterogeneas del panel sin depender del texto del mes."""
+    if serie is None:
+        return pd.Series(dtype="datetime64[ns]")
+    try:
+        return pd.to_datetime(serie, format="mixed", dayfirst=True, errors="coerce")
+    except (TypeError, ValueError):
+        return pd.to_datetime(serie, dayfirst=True, errors="coerce")
+
+
+def serie_semana_iso(serie):
+    fechas = fechas_calendario(serie)
+    if fechas.empty:
+        return pd.Series(dtype="object")
+    iso = fechas.dt.isocalendar()
+    tokens = iso["year"].astype("Int64").astype(str) + "-W" + iso["week"].astype("Int64").astype(str).str.zfill(2)
+    return tokens.where(fechas.notna(), pd.NA)
+
+
+def semanas_calendario_disponibles(serie, meses_seleccionados):
+    fechas = fechas_calendario(serie)
+    if fechas.empty:
+        return []
+    fechas = fechas.loc[fechas.le(pd.Timestamp(HOY_PANEL))]
+    if meses_seleccionados:
+        numeros_mes = {MESES.index(mes) + 1 for mes in meses_seleccionados if mes in MESES}
+        fechas = fechas.loc[fechas.dt.month.isin(numeros_mes)]
+    return sorted(serie_semana_iso(fechas).dropna().astype(str).unique())
+
+
+def etiqueta_semana_calendario(token):
+    try:
+        anio_texto, semana_texto = str(token).split("-W", 1)
+        inicio = datetime.fromisocalendar(int(anio_texto), int(semana_texto), 1)
+        termino = inicio + timedelta(days=6)
+        mes_inicio = MESES_CORTOS[MESES[inicio.month - 1]]
+        mes_termino = MESES_CORTOS[MESES[termino.month - 1]]
+        rango = (
+            f"{inicio.day:02d}-{termino.day:02d} {mes_termino}"
+            if inicio.month == termino.month
+            else f"{inicio.day:02d} {mes_inicio}-{termino.day:02d} {mes_termino}"
+        )
+        return f"Semana {int(semana_texto):02d} · {rango}"
+    except (TypeError, ValueError):
+        return f"Semana {token}"
+
+
+def etiqueta_semana_calendario_clara(token):
+    try:
+        anio_texto, semana_texto = str(token).split("-W", 1)
+        inicio = datetime.fromisocalendar(int(anio_texto), int(semana_texto), 1)
+        termino = inicio + timedelta(days=6)
+        mes_referencia = inicio + timedelta(days=3)
+        mes = MESES_CORTOS[MESES[mes_referencia.month - 1]]
+        return f"Semana {int(semana_texto):02d} - {mes} | {inicio.day:02d}-{termino.day:02d}"
+    except (TypeError, ValueError):
+        return f"Semana {token}"
+
+
+etiqueta_semana_calendario = etiqueta_semana_calendario_clara
+
+
 def resumen_meses_disponibilidad_para_filtro(df_base):
     columnas = ["mes", "solicitudes", "cumple", "no_cumple", "cumplimiento_pct", "bajo_meta"]
     if df_base.empty or "cumple_kpi" not in df_base.columns:
@@ -493,6 +567,10 @@ def cargar(ruta_archivo, version_archivo):
 
     df = pd.read_parquet(ruta_parquet) if usar_parquet else pd.read_excel(ruta)
     df = corregir_region_por_ciudad(df, "Ciudad", "Estado")
+    if "Estado" in df.columns:
+        df["Estado"] = df["Estado"].fillna("").astype(str).str.strip().replace("", "Sin zona")
+    if "Recurso" in df.columns:
+        df["Recurso"] = df["Recurso"].fillna("").astype(str).str.strip()
 
     if "Mes" in df.columns:
         df["Mes"] = pd.Categorical(
@@ -1406,7 +1484,9 @@ def cargar_epa(ruta_db, version_db):
                 con,
             )
             if "region" in base_epa.columns:
-                base_epa["region"] = base_epa["region"].map(normalizar_region_chile)
+                base_epa["region"] = base_epa["region"].map(normalizar_region_chile).replace("", "Sin zona")
+            if "tecnico" in base_epa.columns:
+                base_epa["tecnico"] = base_epa["tecnico"].fillna("").astype(str).str.strip()
             return base_epa
     except Exception:
         return pd.DataFrame(columns=columnas)
@@ -1685,6 +1765,9 @@ def cargar_uso_herramienta(ruta_archivo, version_archivo):
             region_por_ciudad_o_comuna(ciudad, region)
             for ciudad, region in zip(ciudades.fillna(""), df_uso["region_atendida"].fillna(""))
         ]
+        df_uso["region_atendida"] = df_uso["region_atendida"].fillna("").astype(str).str.strip().replace("", "Sin zona")
+    if "tecnico" in df_uso.columns:
+        df_uso["tecnico"] = df_uso["tecnico"].fillna("").astype(str).str.strip()
     return df_uso
 
 
@@ -1953,10 +2036,10 @@ with st.sidebar:
     regiones = sorted(
         df_filtros_base["Estado"].dropna().astype(str).str.strip().replace("", pd.NA).dropna().unique()
     ) if "Estado" in df_filtros_base.columns else []
-    tecnicos = sorted(
-        t for t in df_filtros_base["Recurso"].dropna().unique()
-        if not es_tecnico_demo(t)
-    ) if "Recurso" in df_filtros_base.columns else []
+    tecnicos = sorted({
+        str(t).strip() for t in df_filtros_base["Recurso"].dropna().unique()
+        if str(t).strip() and not es_tecnico_demo(t)
+    }) if "Recurso" in df_filtros_base.columns else []
     clientes_epa = sorted(
         c for c in df_epa["cliente"].dropna().astype(str).str.strip().replace("", pd.NA).dropna().unique()
         if not es_cliente_epa_no_real(c)
@@ -2010,7 +2093,9 @@ with st.sidebar:
 
     for m in MESES:
         if f"mes_{m}" not in st.session_state:
-            st.session_state[f"mes_{m}"] = True
+            st.session_state[f"mes_{m}"] = m in MESES_HASTA_HOY
+        elif m not in MESES_HASTA_HOY:
+            st.session_state[f"mes_{m}"] = False
 
     for c in clientes_epa:
         if f"cli_{c}" not in st.session_state:
@@ -2116,11 +2201,45 @@ with st.sidebar:
             st.session_state["kpi_activo"] = kpi_en_curso
         st.rerun()
 
+    def fechas_periodo_pagina():
+        if pagina_disponibilidad_activa and not df_disponibilidad.empty:
+            return df_disponibilidad.get("fecha_solicitud")
+        if pagina_reclamos_activa and not df_reclamos.empty:
+            return df_reclamos.get("fecha_reclamo")
+        if pagina_uso_herramienta_activa and not df_uso_herramienta.empty:
+            return df_uso_herramienta.get("fecha_atencion")
+        if pagina_epa_activa and not df_epa.empty:
+            fecha_atencion = fechas_calendario(df_epa.get("fecha_atencion"))
+            fecha_respuesta = fechas_calendario(df_epa.get("respuesta_creada"))
+            return fecha_atencion.fillna(fecha_respuesta)
+        return df.get("Fecha de Agendamiento")
+
+    def render_filtro_semanas(meses_seleccionados, key, key_boton):
+        opciones = semanas_calendario_disponibles(fechas_periodo_pagina(), meses_seleccionados)
+        if not opciones:
+            st.markdown('<div class="filter-mini-note">Sin semanas con fecha para el periodo seleccionado</div>', unsafe_allow_html=True)
+            return [], []
+        inicializar_pills_filtro(opciones, key)
+        st.markdown('<div class="filter-subheading">SEMANAS DEL AÑO</div>', unsafe_allow_html=True)
+        boton_seleccionar_todo_pills(opciones, key, key_boton)
+        seleccion = st.pills(
+            "Semanas del año",
+            opciones,
+            selection_mode="multi",
+            format_func=etiqueta_semana_calendario,
+            key=key,
+            label_visibility="collapsed",
+            width="stretch",
+        )
+        return proteger_pills_vacios(seleccion, key), opciones
+
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
     region = list(regiones)
     tecnico = list(tecnicos)
-    meses_sel = list(MESES)
+    meses_sel = list(MESES_HASTA_HOY)
+    semanas_sel = []
+    semanas_disponibles = []
     clientes_sel = clientes_epa
     disp_clientes_sel = clientes_disponibilidad
     disp_coordinadores_sel = []
@@ -2130,7 +2249,7 @@ with st.sidebar:
     if pagina_disp_rec_activa:
         inicializar_pills_filtro(clientes_disponibilidad, "disp_cli_pills")
         inicializar_pills_filtro(zonas_disponibilidad, "disp_zona_pills")
-        inicializar_pills_filtro(MESES, "disp_mes_pills")
+        inicializar_pills_filtro(MESES_HASTA_HOY, "disp_mes_pills")
         if pagina_disponibilidad_activa:
             inicializar_pills_filtro(DISPONIBILIDAD_ESTADOS, "disp_estado_pills")
 
@@ -2176,7 +2295,7 @@ with st.sidebar:
 
         if pagina_disponibilidad_activa:
             disp_estados_sel = []
-            with st.expander("ESTADO", expanded=True):
+            with st.expander("ESTADO", expanded=False):
                 st.markdown('<span class="filter-anchor filter-anchor-status"></span>', unsafe_allow_html=True)
                 boton_seleccionar_todo_pills(
                     DISPONIBILIDAD_ESTADOS,
@@ -2198,13 +2317,13 @@ with st.sidebar:
         with st.expander("PERIODO", expanded=False):
             st.markdown('<span class="filter-anchor filter-anchor-period"></span>', unsafe_allow_html=True)
             boton_seleccionar_todo_pills(
-                MESES,
+                MESES_HASTA_HOY,
                 "disp_mes_pills",
                 "toggle_meses_disponibilidad_pills"
             )
             meses_sel = st.pills(
                 "Periodo disponibilidad",
-                MESES,
+                MESES_HASTA_HOY,
                 selection_mode="multi",
                 format_func=lambda m: MESES_CORTOS.get(m, m),
                 key="disp_mes_pills",
@@ -2212,6 +2331,15 @@ with st.sidebar:
                 width="stretch"
             )
             meses_sel = proteger_pills_vacios(meses_sel, "disp_mes_pills")
+            st.markdown(
+                f'<div class="filter-mini-note">Disponible hasta {MES_ACTUAL_CORTO} {ANIO_PANEL}; los meses futuros se habilitan solos.</div>',
+                unsafe_allow_html=True,
+            )
+            semanas_sel, semanas_disponibles = render_filtro_semanas(
+                meses_sel,
+                "disp_semana_pills",
+                "toggle_semanas_disponibilidad_pills",
+            )
 
     else:
         region=[]
@@ -2230,15 +2358,16 @@ with st.sidebar:
                 if st.checkbox(r, key=f"reg_{r}"):
                     region.append(r)
 
-        if len(region) == 1 and "Estado" in df_filtros_base.columns and "Recurso" in df_filtros_base.columns:
-            tecnicos_filtro = sorted(
-                t for t in df_filtros_base.loc[df_filtros_base["Estado"].isin(region), "Recurso"].dropna().unique()
-                if not es_tecnico_demo(t)
-            )
-            tecnico_contexto = f"de {region[0]}"
+        if region and "Estado" in df_filtros_base.columns and "Recurso" in df_filtros_base.columns:
+            tecnicos_filtro = sorted({
+                str(t).strip()
+                for t in df_filtros_base.loc[df_filtros_base["Estado"].isin(region), "Recurso"].dropna().unique()
+                if str(t).strip() and not es_tecnico_demo(t)
+            })
+            tecnico_contexto = f"de {region[0]}" if len(region) == 1 else f"de {len(region)} zonas seleccionadas"
         else:
-            tecnicos_filtro = tecnicos
-            tecnico_contexto = "activos"
+            tecnicos_filtro = []
+            tecnico_contexto = "porque no hay zonas seleccionadas"
 
         tecnico=[]
         with st.expander("TÉCNICO", expanded=False):
@@ -2262,20 +2391,29 @@ with st.sidebar:
         with st.expander("PERIODO", expanded=False):
             st.markdown('<span class="filter-anchor filter-anchor-period"></span>', unsafe_allow_html=True)
             boton_toggle_filtro(
-                MESES,
+                MESES_HASTA_HOY,
                 "mes",
                 "toggle_meses",
                 "Seleccionar todo",
                 "Vaciar todo"
             )
-            st.markdown('<div class="filter-mini-note">Periodo operacional</div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="filter-mini-note">Acumulado hasta {MES_ACTUAL_CORTO} {ANIO_PANEL}; sin meses futuros.</div>',
+                unsafe_allow_html=True,
+            )
 
             c1,c2=st.columns(2)
-            for i,m in enumerate(MESES):
-                with (c1 if i<6 else c2):
+            mitad_meses = (len(MESES_HASTA_HOY) + 1) // 2
+            for i,m in enumerate(MESES_HASTA_HOY):
+                with (c1 if i < mitad_meses else c2):
                     st.checkbox(MESES_CORTOS.get(m, m), key=f"mes_{m}")
                     if st.session_state[f"mes_{m}"]:
                         meses_sel.append(m)
+            semanas_sel, semanas_disponibles = render_filtro_semanas(
+                meses_sel,
+                "semana_pills",
+                "toggle_semanas_pills",
+            )
 
         clientes_sel = clientes_epa
         if pagina_epa_activa:
@@ -2297,6 +2435,8 @@ with st.sidebar:
 
                 clientes_sel = [c for c in clientes_epa if st.session_state.get(f"cli_{c}", False)]
     st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+
+semanas_filtro_activo = bool(semanas_disponibles)
 
 VISTA_TECNICO_SOLICITADA = bool(
     not pagina_disp_rec_activa
@@ -2325,10 +2465,17 @@ if "Estado" in df_f.columns:
 if "Mes" in df_f.columns:
     df_f = df_f.loc[df_f["Mes"].isin(meses_sel)]
 
+if semanas_filtro_activo and "Fecha de Agendamiento" in df_f.columns:
+    if semanas_sel:
+        df_f = df_f.loc[serie_semana_iso(df_f["Fecha de Agendamiento"]).isin(set(semanas_sel))]
+    else:
+        df_f = df_f.iloc[0:0]
+
 filtros_export = {
     "regiones": region,
     "tecnicos": tecnico,
     "meses": meses_sel,
+    "semanas": [etiqueta_semana_calendario(semana) for semana in semanas_sel],
     "clientes": disp_clientes_sel if pagina_disp_rec_activa else clientes_sel,
     "zonas": disp_zonas_sel,
     "estados": disp_estados_sel if pagina_disponibilidad_activa else [],
@@ -2368,6 +2515,11 @@ if not df_epa_f.empty:
     if meses_sel and len(meses_sel) < len(MESES):
         mes_epa = df_epa_f["_fecha_epa"].dt.month.map(lambda mes: MESES[mes - 1] if pd.notna(mes) else None)
         df_epa_f = df_epa_f[mes_epa.isin(meses_sel) | df_epa_f["_fecha_epa"].isna()]
+    if semanas_filtro_activo:
+        if semanas_sel:
+            df_epa_f = df_epa_f.loc[serie_semana_iso(df_epa_f["_fecha_epa"]).isin(set(semanas_sel))]
+        else:
+            df_epa_f = df_epa_f.iloc[0:0]
 
 df_epa_respondidas = df_epa_f[df_epa_f.get("respondida", pd.Series(dtype=float)).fillna(0).astype(int).eq(1)].copy()
 epa_total_atenciones = len(df_epa_f)
@@ -2392,6 +2544,12 @@ if not df_disp_f.empty:
         df_disp_f = df_disp_f.loc[mes_disp_f.isin(set(map(str, meses_sel)))]
     else:
         df_disp_f = df_disp_f.iloc[0:0]
+
+    if semanas_filtro_activo:
+        if semanas_sel and "fecha_solicitud" in df_disp_f.columns:
+            df_disp_f = df_disp_f.loc[serie_semana_iso(df_disp_f["fecha_solicitud"]).isin(set(semanas_sel))]
+        else:
+            df_disp_f = df_disp_f.iloc[0:0]
 
     estados_sla = set(disp_estados_sel) & {"Cumple", "No cumple"}
     if estados_sla and "cumple_kpi" in df_disp_f.columns:
@@ -2420,6 +2578,12 @@ if not df_reclamos_f.empty:
         df_reclamos_f = df_reclamos_f.loc[mes_reclamos_f.isin(set(map(str, meses_sel)))]
     else:
         df_reclamos_f = df_reclamos_f.iloc[0:0]
+
+    if semanas_filtro_activo:
+        if semanas_sel and "fecha_reclamo" in df_reclamos_f.columns:
+            df_reclamos_f = df_reclamos_f.loc[serie_semana_iso(df_reclamos_f["fecha_reclamo"]).isin(set(semanas_sel))]
+        else:
+            df_reclamos_f = df_reclamos_f.iloc[0:0]
 
     if pagina_disponibilidad_activa and "Reclamo" not in set(disp_estados_sel):
         df_reclamos_f = df_reclamos_f.iloc[0:0]
@@ -2517,6 +2681,11 @@ if not df_uso_f.empty:
         df_uso_f = df_uso_f.loc[mes_uso.isin(set(map(str, meses_sel))) | fecha_uso.isna()]
     else:
         df_uso_f = df_uso_f.iloc[0:0]
+    if semanas_filtro_activo:
+        if semanas_sel:
+            df_uso_f = df_uso_f.loc[serie_semana_iso(df_uso_f["_fecha_uso"]).isin(set(semanas_sel))]
+        else:
+            df_uso_f = df_uso_f.iloc[0:0]
 
 uso_total = len(df_uso_f)
 uso_promedio = float(df_uso_f["puntaje_total"].dropna().mean()) if uso_total and "puntaje_total" in df_uso_f.columns else 0
@@ -2919,7 +3088,36 @@ with st.sidebar:
 # HEADER
 # =========================================================
 
-c1, c2 = st.columns([8,1])
+
+@st.fragment(run_every=60)
+def render_reloj_calendario_panel():
+    ahora = datetime.now(ZONA_HORARIA_PANEL)
+    fecha_actual = ahora.date().isoformat()
+    fecha_anterior = st.session_state.get("_fecha_calendario_panel")
+    st.session_state["_fecha_calendario_panel"] = fecha_actual
+    if fecha_anterior and fecha_anterior != fecha_actual:
+        st.rerun(scope="app")
+
+    iso = ahora.isocalendar()
+    dias = ("LUN", "MAR", "MIÉ", "JUE", "VIE", "SÁB", "DOM")
+    meses = ("ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC")
+    st.markdown(
+        f"""
+        <div class="calendar-header-card" title="Fecha y hora de Santiago; se actualiza automáticamente">
+            <div class="calendar-header-icon"><i></i><span>{ahora.day:02d}</span></div>
+            <div class="calendar-header-copy">
+                <small>HOY · SANTIAGO</small>
+                <strong>SEMANA {iso.week:02d}</strong>
+                <p>{dias[ahora.weekday()]} {ahora.day:02d} {meses[ahora.month - 1]} · {ahora.strftime('%H:%M')}</p>
+            </div>
+            <b class="calendar-live-dot" aria-hidden="true"></b>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+c1, c_calendario, c2 = st.columns([6.8,1.75,1], gap="small")
 
 with c1:
 
@@ -2934,6 +3132,10 @@ with c1:
         Cumplimiento de KPI, adherencia operacional y desempeño del Servicio Técnico Externo.
     </div>
     """, unsafe_allow_html=True)
+
+
+with c_calendario:
+    render_reloj_calendario_panel()
 
 
 with c2:
@@ -2951,54 +3153,87 @@ with c2:
 KPI_METODOLOGIA = {
     KPI_INICIO: {
         "color": CELESTE,
-        "titulo": "Cómo se mide Inicio de actividad",
-        "mide": "Puntualidad del inicio real de cada atención frente al comienzo de su ventana WFM.",
-        "formula": "Atenciones con Inicio − Ventana ≤ 15 min ÷ atenciones filtradas × 100",
-        "criterio": "Cumple si ambas horas son válidas y el técnico inicia antes de la ventana o hasta 15 minutos después. Meta: 80%.",
-        "fuente": "WFM 2026. Se aplican los filtros activos de ST, región, técnico y período.",
+        "titulo": "Inicio de actividad: puntualidad de la visita",
+        "pregunta": "¿Qué porcentaje de las atenciones comenzó dentro del tiempo permitido?",
+        "calculo": "Una atención es puntual cuando el inicio real ocurre antes de la ventana o, como máximo, 15 minutos después. KPI = puntuales ÷ atenciones con horas válidas × 100.",
+        "lectura": "80% o más cumple la meta. Entre 75% y 79,9% requiere vigilancia; bajo 75% necesita un plan correctivo. Un inicio adelantado sí cumple.",
+        "datos": "WFM 2026. Cambia con ST, región, técnico, mes y semana seleccionados.",
+        "ejemplo": "De 100 atenciones válidas, 82 comenzaron dentro de la tolerancia: el KPI es 82% y cumple la meta.",
     },
     KPI_EPA: {
         "color": VERDE,
-        "titulo": "Cómo se mide EPA Satisfacción",
-        "mide": "Proporción de encuestas respondidas cuya nota promedio de las cinco preguntas es 4 o 5.",
-        "formula": "Respuestas con promedio Q1:Q5 ≥ 4 ÷ respuestas completadas × 100",
-        "criterio": "Las encuestas pendientes se muestran aparte y no entran al denominador de satisfacción. Meta: 90%.",
-        "fuente": "Bases EPA IBM, SAO y ECC. Escala de cada pregunta: 1 a 5.",
+        "titulo": "EPA: satisfacción informada por el usuario",
+        "pregunta": "¿Qué porcentaje de quienes respondieron evaluó satisfactoriamente la atención?",
+        "calculo": "Se promedian Q1 a Q5 de cada encuesta. Una respuesta es satisfactoria si su promedio es 4 o más. KPI = satisfactorias ÷ encuestas respondidas × 100.",
+        "lectura": "90% o más cumple la meta. Las encuestas pendientes no bajan el KPI, pero una muestra pequeña hace menos representativo el resultado.",
+        "datos": "Encuestas EPA IBM, SAO y ECC, escala 1 a 5. Cambia con los filtros activos.",
+        "ejemplo": "Si responden 20 usuarios y 18 obtienen promedio 4 o 5, la satisfacción es 90%. Las encuestas pendientes se informan aparte.",
     },
     KPI_USO_HERRAMIENTA: {
         "color": NARANJO,
-        "titulo": "Cómo se mide Uso correcto de herramienta",
-        "mide": "Calidad documental de cada OT: identificación, detalle, equipos, activo fijo, redacción y evidencias aplicables.",
-        "formula": "Nota OT = 1 + (puntaje documental % × 6); resultado general = promedio de OT filtradas",
-        "criterio": f"Escala de 1 a 7. La meta {USO_HERRAMIENTA_META_PCT}% equivale a nota {USO_HERRAMIENTA_META_NOTA:.1f}; hallazgos incompletos reducen el puntaje.",
-        "fuente": "PDF de OT procesados desde PST, respetando ST, región, técnico y período.",
+        "titulo": "Uso de herramienta: calidad de la OT",
+        "pregunta": "¿Qué tan completa y trazable quedó la orden de trabajo después de la visita?",
+        "calculo": "La OT suma puntos por identificación, detalle técnico, equipos, activo fijo, redacción, firmas y evidencias. Nota = 1 + (porcentaje documental × 6).",
+        "lectura": f"La escala es de 1 a 7. La meta es nota {USO_HERRAMIENTA_META_NOTA:.1f} ({USO_HERRAMIENTA_META_PCT}%). Datos faltantes o retiros sin declarar reducen la nota.",
+        "datos": "PDF de OT extraídos desde PST. Cambia con ST, región, técnico, mes y semana.",
+        "ejemplo": f"Una OT con {USO_HERRAMIENTA_META_PCT}% de los requisitos obtiene nota {USO_HERRAMIENTA_META_NOTA:.1f} y alcanza la meta.",
     },
     KPI_DISPONIBILIDAD: {
         "color": ROSADO,
-        "titulo": "Cómo se mide Disponibilidad",
-        "mide": "Rapidez de respuesta del ST a solicitudes CECOM dentro del horario hábil operacional.",
-        "formula": f"Solicitudes respondidas en ≤ {DISPONIBILIDAD_SLA_MIN} min hábiles ÷ solicitudes medibles × 100",
-        "criterio": f"Una solicitud sin respuesta o sobre {DISPONIBILIDAD_SLA_MIN} minutos no cumple. Horario: lunes a viernes, 08:00–19:00. Meta: {DISPONIBILIDAD_META_PCT}%.",
-        "fuente": "Correos PST clasificados. Las reiteraciones se informan como fricción, sin duplicar la solicitud base.",
+        "titulo": "Disponibilidad: velocidad de respuesta del ST",
+        "pregunta": f"¿Qué porcentaje de las solicitudes CECOM recibió respuesta del ST dentro de {DISPONIBILIDAD_SLA_MIN} minutos hábiles?",
+        "calculo": f"KPI = solicitudes respondidas en {DISPONIBILIDAD_SLA_MIN} minutos o menos ÷ solicitudes medibles × 100.",
+        "lectura": f"{DISPONIBILIDAD_META_PCT}% o más cumple. Una solicitud sin respuesta o respondida fuera del plazo no cumple. El reloj solo corre de lunes a viernes, 08:00 a 19:00.",
+        "datos": "Correos PST clasificados. Las reiteraciones muestran fricción, pero no duplican la solicitud en el denominador.",
+        "ejemplo": f"Si 90 de 100 solicitudes se responden dentro de {DISPONIBILIDAD_SLA_MIN} minutos hábiles, el KPI es 90% y cumple la meta.",
     },
     KPI_RECLAMOS: {
         "color": AZUL_CLARO,
-        "titulo": "Cómo se mide Reclamos",
-        "mide": "Incidencia de señales operacionales —reclamos y reforzamientos— respecto de las atenciones asignadas.",
-        "formula": "Ratio = señales clasificadas ÷ atenciones asignadas × 100; cumplimiento = máx(0, 100 − ratio)",
-        "criterio": f"Meta de cumplimiento: {RECLAMOS_META_CUMPLIMIENTO_PCT}% —equivale a mantener el ratio de señales en ≤ {RECLAMOS_META_RATIO_INCUMPLIMIENTO_PCT}%—.",
-        "fuente": "PST + WFM. Los registros se depuran por ticket y familia para evitar duplicidades.",
+        "titulo": "Reclamos: impacto sobre las atenciones",
+        "pregunta": "¿Qué proporción de las atenciones generó una señal operacional, ya sea reclamo o reforzamiento?",
+        "calculo": "Ratio de señales = señales depuradas ÷ atenciones asignadas × 100. Cumplimiento ajustado = 100 − ratio de señales, con mínimo 0%.",
+        "lectura": f"Cumple si el resultado ajustado es {RECLAMOS_META_CUMPLIMIENTO_PCT}% o más; equivale a mantener las señales en {RECLAMOS_META_RATIO_INCUMPLIMIENTO_PCT}% o menos.",
+        "datos": "PST + WFM. Se elimina la repetición del mismo ticket y familia para no inflar el resultado.",
+        "ejemplo": "Con 8 señales depuradas sobre 100 atenciones, el ratio es 8% y el cumplimiento ajustado es 92%: cumple.",
+    },
+}
+
+KPI_LECTURA_SIMPLE = {
+    KPI_INICIO: {
+        "mide": "Muestra cuántas visitas comenzaron a tiempo respecto de su horario agendado.",
+        "meta": "Está bien cuando 8 de cada 10 atenciones comienzan dentro de la tolerancia de 15 minutos.",
+        "revisar": "Si baja, mira primero la zona y luego los técnicos con más atrasos repetidos.",
+    },
+    KPI_EPA: {
+        "mide": "Resume qué tan conformes quedaron los usuarios que respondieron la encuesta.",
+        "meta": "Está bien cuando al menos 9 de cada 10 respuestas son satisfactorias.",
+        "revisar": "Si baja, revisa comentarios, preguntas con menor nota y la zona donde se repite el problema.",
+    },
+    KPI_USO_HERRAMIENTA: {
+        "mide": "Revisa si la orden de trabajo quedó completa, clara y con las evidencias necesarias.",
+        "meta": f"Está bien cuando la nota llega a {USO_HERRAMIENTA_META_NOTA:.1f} o más en la escala de 1 a 7.",
+        "revisar": "Si baja, identifica qué dato o evidencia falta y corrígelo con el técnico responsable.",
+    },
+    KPI_DISPONIBILIDAD: {
+        "mide": "Muestra si el ST respondió las solicitudes CECOM dentro del tiempo acordado.",
+        "meta": f"Está bien cuando al menos {DISPONIBILIDAD_META_PCT:.0f}% recibe respuesta dentro de {DISPONIBILIDAD_SLA_MIN} minutos hábiles.",
+        "revisar": "Si baja, comienza por las solicitudes sin respuesta y luego por las más atrasadas de cada zona.",
+    },
+    KPI_RECLAMOS: {
+        "mide": "Muestra cuánto afectan los reclamos y reforzamientos al total de atenciones realizadas.",
+        "meta": f"Está bien cuando el cumplimiento se mantiene en {RECLAMOS_META_CUMPLIMIENTO_PCT:.0f}% o más.",
+        "revisar": "Si baja, busca la causa que más se repite, la zona afectada y el responsable de corregirla.",
     },
 }
 
 
 def render_tarjeta_metodologia_kpi(kpi):
     metodo = KPI_METODOLOGIA[kpi]
+    simple = KPI_LECTURA_SIMPLE[kpi]
     bloques = [
-        ("Qué mide", metodo["mide"], "01"),
-        ("Fórmula", metodo["formula"], "ƒx"),
-        ("Criterio", metodo["criterio"], "✓"),
-        ("Fuente", metodo["fuente"], "DB"),
+        ("Qué muestra", simple["mide"], "01"),
+        ("Cuándo está bien", simple["meta"], "OK"),
+        ("Qué revisar", simple["revisar"], "→"),
     ]
     detalle_html = "".join(
         f"""
@@ -3018,9 +3253,9 @@ def render_tarjeta_metodologia_kpi(kpi):
             <div class="kpi-method-heading">
                 <span class="kpi-method-main-icon">i</span>
                 <div>
-                    <span class="kpi-method-eyebrow">Metodología del indicador</span>
+                    <span class="kpi-method-eyebrow">Cómo se mide</span>
                     <h3>{html.escape(metodo['titulo'])}</h3>
-                    <p>La lectura se recalcula automáticamente con los filtros activos.</p>
+                    <p>Explicado en simple. El resultado cambia con los filtros seleccionados.</p>
                 </div>
             </div>
             <div class="kpi-method-grid">{detalle_html}</div>
@@ -3043,6 +3278,7 @@ mostrar_kpi_epa = kpi_activo == KPI_EPA
 mostrar_kpi_uso_herramienta = kpi_activo == KPI_USO_HERRAMIENTA
 mostrar_kpi_disponibilidad = kpi_activo == KPI_DISPONIBILIDAD
 mostrar_kpi_reclamos = kpi_activo == KPI_RECLAMOS
+
 
 if mostrar_kpi_inicio:
     st.markdown('<div class="kpi-divider"></div>', unsafe_allow_html=True)
@@ -3427,6 +3663,26 @@ def render_disponibilidad_kpi_cards(color_cumplimiento, disp_pct, disp_total, di
     ])
 
 
+def recomendacion_clara(indicador, estado, titulo, lectura, accion, tono):
+    return {
+        "indicador": indicador,
+        "estado": estado,
+        "titulo": titulo,
+        "lectura": lectura,
+        "accion": accion,
+        "tono": tono,
+    }
+
+
+def estado_segun_meta(valor, meta, tolerancia=5.0, menor_es_mejor=False):
+    brecha = (meta - valor) if menor_es_mejor else (valor - meta)
+    if brecha >= 0:
+        return "Meta cumplida", "bien", brecha
+    if brecha >= -abs(tolerancia):
+        return "Cerca de la meta", "accion", brecha
+    return "Prioridad alta", "mal", brecha
+
+
 def construir_insights_disponibilidad_fallback(metricas):
     disp_total = int(metricas.get("disp_total", 0))
     disp_pct = float(metricas.get("disp_pct", 0))
@@ -3438,39 +3694,50 @@ def construir_insights_disponibilidad_fallback(metricas):
     disp_reit_cecom_total = int(metricas.get("disp_reit_cecom_total", 0))
     comparativo = str(metricas.get("comparativo_disponibilidad_proveedor", "")).strip()
 
-    if disp_total:
-        titulo_cumplimiento = "Recomendación SLA"
-        cuerpo_cumplimiento = (
-            f"{disp_cumple}/{disp_total} solicitudes cumplen ({disp_pct:.1f}%). "
-            f"Acción: revisar los casos fuera de 30 min y cerrar primero las {disp_sin_respuesta} sin respuesta; brecha {disp_brecha_meta:+.1f} pp."
-        )
-        if comparativo:
-            cuerpo_cumplimiento = f"{cuerpo_cumplimiento} Usar comparativo para exigir plan al ST más bajo: {comparativo}."
-    else:
-        titulo_cumplimiento = "Sin base filtrada"
-        cuerpo_cumplimiento = "Recomendación: cambiar filtros o actualizar PST si esperabas solicitudes de disponibilidad."
+    if not disp_total:
+        return [recomendacion_clara(
+            "Base filtrada", "Sin datos", "No hay solicitudes para evaluar",
+            "Los filtros activos no contienen solicitudes medibles de disponibilidad.",
+            "Revisar mes, semana, cliente y zona. Si esperabas casos nuevos, ejecutar la actualización PST.",
+            "accion",
+        )]
 
-    if disp_reit_cecom_total or disp_reiteraciones:
-        titulo_reiteraciones = "Recomendación fricción"
-        cuerpo_reiteraciones = (
-            f"{disp_reit_cecom_total} reiteraciones CECOM y {disp_reiteraciones} totales en "
-            f"{disp_tickets_reiterados} tickets. Acción: ordenar por tickets más reiterados, asignar responsable y exigir respuesta documentada del ST."
-        )
-    else:
-        titulo_reiteraciones = "Control preventivo"
-        cuerpo_reiteraciones = "Recomendación: mantener revisión diaria; si aparece una reiteración, tratarla como riesgo antes de que rompa SLA."
+    estado_sla, tono_sla, _ = estado_segun_meta(disp_pct, DISPONIBILIDAD_META_PCT, tolerancia=5)
+    brecha_texto = "sobre" if disp_brecha_meta >= 0 else "bajo"
+    accion_sla = (
+        "Mantener control semanal y auditar una muestra de respuestas para asegurar trazabilidad."
+        if tono_sla == "bien" else
+        f"Cerrar primero las {disp_sin_respuesta} solicitudes sin respuesta y después ordenar los casos sobre {DISPONIBILIDAD_SLA_MIN} minutos por zona y antigüedad."
+    )
+    if comparativo and tono_sla != "bien":
+        accion_sla += " En la vista Todo, comenzar por el ST con menor cumplimiento."
 
-    if disp_sin_respuesta:
-        titulo_respuesta = "Recomendación cierre"
-        cuerpo_respuesta = f"{disp_sin_respuesta} solicitudes siguen sin respuesta. Acción: priorizar por antigüedad, cliente crítico y responsable antes de presentar cumplimiento."
-    else:
-        titulo_respuesta = "Sostener disciplina"
-        cuerpo_respuesta = "Recomendación: mantener el mismo ritual de control y auditar una muestra de respuestas para asegurar trazabilidad."
+    total_friccion = max(disp_reit_cecom_total, disp_reiteraciones)
+    estado_friccion = "Sin fricción" if total_friccion == 0 else "Fricción detectada"
+    tono_friccion = "bien" if total_friccion == 0 else "mal" if disp_tickets_reiterados >= 3 else "accion"
 
     return [
-        {"indicador": "Cumplimiento KPI", "titulo": titulo_cumplimiento, "cuerpo": cuerpo_cumplimiento, "tono": "mal" if disp_pct < DISPONIBILIDAD_META_PCT else "bien"},
-        {"indicador": "Reiteraciones", "titulo": titulo_reiteraciones, "cuerpo": cuerpo_reiteraciones, "tono": "mal" if disp_reit_cecom_total or disp_reiteraciones else "bien"},
-        {"indicador": "Respuesta", "titulo": titulo_respuesta, "cuerpo": cuerpo_respuesta, "tono": "mal" if disp_sin_respuesta else "bien"},
+        recomendacion_clara(
+            "Cumplimiento SLA", estado_sla,
+            f"{abs(disp_brecha_meta):.1f} pp {brecha_texto} la meta",
+            f"{disp_cumple} de {disp_total} solicitudes cumplen: {disp_pct:.1f}% frente a una meta de {DISPONIBILIDAD_META_PCT}%.",
+            accion_sla,
+            tono_sla,
+        ),
+        recomendacion_clara(
+            "Reiteraciones", estado_friccion,
+            "La insistencia revela espera operativa" if total_friccion else "No hay insistencias en la selección",
+            f"Se observan {disp_reit_cecom_total} reiteraciones CECOM y {disp_reiteraciones} reiteraciones totales en {disp_tickets_reiterados} tickets.",
+            "Ordenar los tickets por cantidad de reiteraciones, asignar dueño y registrar la respuesta comprometida." if total_friccion else "Mantener la revisión diaria y tratar la primera reiteración como alerta preventiva.",
+            tono_friccion,
+        ),
+        recomendacion_clara(
+            "Solicitudes sin respuesta", "Pendientes críticos" if disp_sin_respuesta else "Todo respondido",
+            f"{disp_sin_respuesta} solicitudes requieren cierre" if disp_sin_respuesta else "No quedan solicitudes abiertas",
+            f"La selección contiene {disp_sin_respuesta} solicitudes sin una respuesta válida del ST.",
+            "Priorizar por antigüedad, cliente crítico y zona; no presentar el KPI como cerrado mientras existan pendientes." if disp_sin_respuesta else "Conservar evidencia y revisar semanalmente una muestra de respuestas.",
+            "mal" if disp_sin_respuesta else "bien",
+        ),
     ]
 
 
@@ -3527,37 +3794,58 @@ def construir_insights_reclamos_fallback(metricas):
     proveedor_ref_top_count = int(metricas.get("reclamos_proveedor_reforzado_top_count", 0))
     comparativo = str(metricas.get("comparativo_reclamos_proveedor", "")).strip()
 
-    if reclamos_total:
-        titulo_volumen = "Recomendación señales"
-        cuerpo_volumen = (
-            f"{reclamos_total} señales sobre {atenciones} atenciones: {reclamos_duros} reclamos y {reforzamientos} reforzamientos. "
-            f"Acción: separar reclamo real de reforzamiento, revisar evidencia y cerrar plan con responsable; incumplimiento {ratio_incumplimiento:.1f}%."
-        )
-    else:
-        titulo_volumen = "Sin reclamos activos"
-        cuerpo_volumen = "Recomendación: sostener seguimiento preventivo y actualizar PST si esperabas nuevos reclamos o reforzamientos."
+    if not atenciones:
+        return [recomendacion_clara(
+            "Base filtrada", "Sin datos", "No hay atenciones para calcular el ratio",
+            "Sin atenciones asignadas no existe un denominador válido para medir reclamos.",
+            "Revisar mes, semana, cliente y zona antes de interpretar el resultado.",
+            "accion",
+        )]
+
+    estado_ajuste, tono_ajuste, brecha_ajuste = estado_segun_meta(
+        cumplimiento_ajustado, RECLAMOS_META_CUMPLIMIENTO_PCT, tolerancia=3
+    )
+    direccion = "sobre" if brecha_meta >= 0 else "bajo"
+    accion_ajuste = (
+        "Mantener seguimiento preventivo y comprobar que cada señal continúe depurada por ticket y causa."
+        if tono_ajuste == "bien" else
+        "Revisar primero los reclamos reales, validar evidencia y convertir cada causa repetida en un compromiso con dueño y fecha."
+    )
+    if comparativo and tono_ajuste != "bien":
+        accion_ajuste += " En la vista Todo, iniciar por el ST con peor cumplimiento ajustado."
 
     if reforzamientos:
-        titulo_foco_cliente = "Recomendación refuerzo"
-        cuerpo_foco_cliente = f"{proveedor_ref_top} concentra {proveedor_ref_top_count} reforzamientos. Acción: transformar cada correo en compromiso semanal con causa, dueño, fecha y evidencia."
+        foco_estado, foco_tono = "Refuerzo concentrado", "accion"
+        foco_titulo = f"{proveedor_ref_top} concentra el refuerzo"
+        foco_lectura = f"Registra {proveedor_ref_top_count} de {reforzamientos} reforzamientos en la selección."
+        foco_accion = "Convertir cada reforzamiento en causa, responsable, fecha de cierre y evidencia verificable."
     elif cliente_top_count:
-        titulo_foco_cliente = "Recomendación cliente"
-        cuerpo_foco_cliente = f"{cliente_top} tiene {cliente_top_count} señales. Acción: validar tickets distintos, técnico, fecha y causa antes de levantar compromiso al ST."
+        foco_estado, foco_tono = "Cliente a revisar", "accion"
+        foco_titulo = f"{cliente_top} concentra {cliente_top_count} señales"
+        foco_lectura = f"El foco principal está en {cliente_top}; validar cuántos corresponden a tickets distintos antes de escalar."
+        foco_accion = "Cruzar ticket, zona, fecha y causa; luego asignar la corrección al ST responsable."
     else:
-        titulo_foco_cliente = "Sin foco operativo"
-        cuerpo_foco_cliente = "Recomendación: no accionar correctivos masivos; mantener monitoreo y revisar cambios al actualizar PST."
-
-    titulo_motivo = "Recomendación causa"
-    if reclamos_total:
-        base_motivo = f"{motivo_top}: {motivo_top_count} registros. Cliente a revisar: {cliente_top}. Clientes afectados: {reclamos_clientes}; tickets: {reclamos_tickets}."
-        cuerpo_motivo = f"{base_motivo} Acción: priorizar la causa dominante y comparar ST antes de reclamar. {comparativo}" if comparativo else f"{base_motivo} Acción: comparar proveedor, causa y recurrencia antes de reclamar a contratista."
-    else:
-        cuerpo_motivo = "Recomendación: sin motivo dominante; enfocar presentación en ausencia de señales y trazabilidad de control."
+        foco_estado, foco_tono = "Sin concentración", "bien"
+        foco_titulo = "No existe un foco operativo dominante"
+        foco_lectura = "La selección no muestra clientes ni proveedores concentrando señales."
+        foco_accion = "Mantener monitoreo y evitar acciones correctivas masivas sin evidencia nueva."
 
     return [
-        {"indicador": "Volumen", "titulo": titulo_volumen, "cuerpo": cuerpo_volumen, "tono": "mal" if reclamos_total else "bien"},
-        {"indicador": "Foco operativo", "titulo": titulo_foco_cliente, "cuerpo": cuerpo_foco_cliente, "tono": "accion" if reforzamientos else "mal" if cliente_top_count else "bien"},
-        {"indicador": "Causa", "titulo": titulo_motivo, "cuerpo": cuerpo_motivo, "tono": "accion" if reclamos_total else "bien"},
+        recomendacion_clara(
+            "Cumplimiento ajustado", estado_ajuste,
+            f"{abs(brecha_meta):.1f} pp {direccion} la meta",
+            f"Hay {reclamos_total} señales sobre {atenciones} atenciones: ratio {ratio_incumplimiento:.1f}% y cumplimiento ajustado {cumplimiento_ajustado:.1f}%.",
+            accion_ajuste,
+            tono_ajuste,
+        ),
+        recomendacion_clara("Foco operativo", foco_estado, foco_titulo, foco_lectura, foco_accion, foco_tono),
+        recomendacion_clara(
+            "Causa dominante", "Causa identificada" if reclamos_total else "Sin señales",
+            f"{motivo_top}: {motivo_top_count} registros" if reclamos_total else "No hay una causa que priorizar",
+            f"La selección reúne {reclamos_duros} reclamos, {reforzamientos} reforzamientos, {reclamos_tickets} tickets y {reclamos_clientes} clientes.",
+            "Comenzar por la causa más repetida, comprobar recurrencia por zona y revisar el detalle antes de exigir un plan al contratista." if reclamos_total else "Conservar trazabilidad y actualizar PST cuando corresponda.",
+            "accion" if reclamos_total else "bien",
+        ),
     ]
 
 
@@ -3566,21 +3854,36 @@ def render_analisis_reclamos(metricas):
 
 
 def render_analisis_hoja(nombre_hoja, metricas, fallback):
-    # Sin LLM local: insights livianos, deterministicos y recalculados desde la data filtrada.
     insights = fallback
 
     colores = {"bien": VERDE, "mal": ROSADO, "accion": CELESTE}
-    html_cards = []
-    for insight in insights:
-        color = colores.get(insight.get("tono"), CELESTE)
-        html_cards.append(
-            f'<div class="ai-insight-card" style="--accent:{color};">'
-            f'<div class="ai-insight-kicker">Recomendación · {html.escape(str(insight.get("indicador", "")))}</div>'
-            f'<div class="ai-insight-title">{html.escape(str(insight.get("titulo", "")))}</div>'
-            f'<div class="ai-insight-body">{html.escape(str(insight.get("cuerpo", "")))}</div>'
+    estados_default = {"bien": "Meta cumplida", "mal": "Prioridad alta", "accion": "Requiere atención"}
+    filas = []
+    for indice, insight in enumerate(insights, start=1):
+        tono = insight.get("tono", "accion")
+        color = colores.get(tono, CELESTE)
+        estado = str(insight.get("estado") or estados_default.get(tono, "Revisar"))
+        lectura = str(insight.get("lectura") or insight.get("cuerpo") or "")
+        accion = str(insight.get("accion") or "Revisar el detalle filtrado antes de definir responsables.")
+        filas.append(
+            f'<div class="recommendation-row" style="--accent:{color};">'
+            f'<div class="recommendation-number">{indice:02d}</div>'
+            f'<div class="recommendation-reading">'
+            f'<div class="recommendation-meta"><span>{html.escape(str(insight.get("indicador", "")))}</span><b>{html.escape(estado)}</b></div>'
+            f'<h4>{html.escape(str(insight.get("titulo", "")))}</h4>'
+            f'<p>{html.escape(lectura)}</p>'
+            f'</div>'
+            f'<div class="recommendation-next"><span>Qué hacer ahora</span><p>{html.escape(accion)}</p></div>'
             f'</div>'
         )
-    st.markdown(f'<div class="ai-insight-grid">{"".join(html_cards)}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<section class="recommendation-panel">'
+        f'<div class="recommendation-heading"><div><span>RECOMENDACIÓN</span><h3>Qué conviene hacer con esta lectura</h3></div>'
+        f'<p>{html.escape(nombre_hoja)} · responde a los filtros activos</p></div>'
+        f'<div class="recommendation-list">{"".join(filas)}</div>'
+        f'</section>',
+        unsafe_allow_html=True,
+    )
 
 
 def construir_insights_inicio_fallback(metricas):
@@ -3593,34 +3896,50 @@ def construir_insights_inicio_fallback(metricas):
     no_finalizadas_total = int(metricas.get("no_finalizadas", 0))
     comparativo = str(metricas.get("comparativo_inicio_proveedor", "")).strip()
 
-    titulo_cumplimiento = "Recomendación inicio"
-    cuerpo_cumplimiento = (
-        f"{pct_cumplimiento:.1f}% de cumplimiento sobre {total_base} atenciones. "
-        + (f"Acción: tomar el ST bajo 80%, revisar atrasos por región y exigir plan por técnico. Comparativo: {comparativo}." if comparativo else "Acción: priorizar proveedor, técnico o región bajo 80% y revisar ventanas con atraso.")
-        if total_base else
-        "Recomendación: revisar filtros o actualizar WFM si esperabas atenciones."
+    if not total_base:
+        return [recomendacion_clara(
+            "Base filtrada", "Sin datos", "No hay atenciones para evaluar",
+            "Los filtros activos dejaron la vista sin atenciones WFM.",
+            "Revisar zona, técnico, mes y semana. Si esperabas nuevos datos, ejecutar la actualización WFM.",
+            "accion",
+        )]
+
+    estado_inicio, tono_inicio, brecha_inicio = estado_segun_meta(pct_cumplimiento, 80, tolerancia=5)
+    estado_primera, tono_primera, brecha_primera = estado_segun_meta(pct_primera, 70, tolerancia=5)
+    estado_revisita, tono_revisita, brecha_revisita = estado_segun_meta(
+        pct_revisitas_valor, 5, tolerancia=2.5, menor_es_mejor=True
     )
 
-    titulo_primera = "Recomendación primera visita"
-    cuerpo_primera = (
-        f"{finalizadas_primera} cierres en primera visita ({pct_primera:.1f}%). "
-        f"Acción: auditar las {no_finalizadas_total} no finalizadas, validar contacto, repuesto y motivo de no cierre."
-        if total_base else
-        "Recomendación: sin base filtrada, no tomar acción correctiva por técnico."
+    accion_inicio = (
+        "Mantener el control semanal y auditar una muestra de inicios para sostener el resultado."
+        if tono_inicio == "bien" else
+        "Comenzar por la zona con menor cumplimiento, revisar sus semanas críticas y después bajar a los técnicos de esa zona."
     )
-
-    titulo_revisitas = "Recomendación revisitas"
-    cuerpo_revisitas = (
-        f"{revisitas_total} revisitas equivalen a {pct_revisitas_valor:.1f}% de la base. "
-        + ("Acción: comparar recurrencia por ST antes de bajar a técnico." if comparativo else "Acción: revisar causa raíz por técnico, repuesto, contacto previo y cierre WFM.")
-        if total_base else
-        "Recomendación: sin base filtrada, esperar actualización WFM."
-    )
+    if comparativo and tono_inicio != "bien":
+        accion_inicio += " En la vista Todo, comenzar por el ST con menor cumplimiento."
 
     return [
-        {"indicador": "Cumplimiento inicio", "titulo": titulo_cumplimiento, "cuerpo": cuerpo_cumplimiento, "tono": "mal" if pct_cumplimiento < 80 else "bien"},
-        {"indicador": "Primera visita", "titulo": titulo_primera, "cuerpo": cuerpo_primera, "tono": "bien" if pct_primera >= 70 else "accion"},
-        {"indicador": "Revisitas", "titulo": titulo_revisitas, "cuerpo": cuerpo_revisitas, "tono": "bien" if pct_revisitas_valor <= 5 else "mal"},
+        recomendacion_clara(
+            "Puntualidad", estado_inicio,
+            f"Inicio {abs(brecha_inicio):.1f} pp {'sobre' if brecha_inicio >= 0 else 'bajo'} la meta",
+            f"{pct_cumplimiento:.1f}% de {total_base} atenciones comenzó dentro de la tolerancia de 15 minutos; la meta es 80%.",
+            accion_inicio,
+            tono_inicio,
+        ),
+        recomendacion_clara(
+            "Cierre en primera visita", estado_primera,
+            f"{pct_primera:.1f}% cerró sin una visita adicional",
+            f"Se cerraron {finalizadas_primera} atenciones en primera visita y quedaron {no_finalizadas_total} no finalizadas. Referencia operativa: 70%.",
+            "Revisar en las no finalizadas el contacto previo, disponibilidad de repuesto y motivo de no cierre." if tono_primera != "bien" else "Mantener trazabilidad del cierre y revisar semanalmente los casos no finalizados.",
+            tono_primera,
+        ),
+        recomendacion_clara(
+            "Revisitas", estado_revisita,
+            f"{pct_revisitas_valor:.1f}% de revisitas frente a referencia máxima de 5%",
+            f"La selección contiene {revisitas_total} tickets con visita adicional sobre {total_base} atenciones.",
+            "Revisar en la zona afectada si se repiten problemas de repuesto, contacto previo, diagnóstico o cierre; después identificar los técnicos recurrentes." if tono_revisita != "bien" else "Mantener el control por zona y verificar que el porcentaje no aumente en semanas siguientes.",
+            tono_revisita,
+        ),
     ]
 
 
@@ -3637,34 +3956,40 @@ def construir_insights_epa_fallback(metricas):
     recomendacion = float(metricas.get("epa_recomendacion", 0))
     tasa_respuesta = round(respondidas / max(total_atenciones, 1) * 100, 1) if total_atenciones else 0
 
-    titulo_satisfaccion = "Recomendación satisfacción"
-    cuerpo_satisfaccion = (
-        f"{satisfaccion:.1f}% de satisfacción y promedio {promedio:.1f}/5. "
-        "Acción: leer comentarios de notas bajo 4, clasificar causa y reforzar al técnico/ST con menor promedio."
-        if respondidas else
-        "Recomendación: aún no hay respuestas suficientes; primero aumentar captura EPA."
-    )
+    if not total_atenciones:
+        return [recomendacion_clara(
+            "Base EPA", "Sin encuestas", "No hay encuestas en la selección",
+            "La vista no contiene invitaciones EPA para los filtros activos.",
+            "Validar la carga EPA y ampliar mes, semana o cliente antes de evaluar desempeño.",
+            "accion",
+        )]
 
-    titulo_respuesta = "Recomendación captura"
-    cuerpo_respuesta = (
-        f"{respondidas}/{total_atenciones} respuestas ({tasa_respuesta:.1f}%). "
-        f"Acción: recuperar {pendientes} pendientes con contacto post atención el mismo día y control por técnico."
-        if total_atenciones else
-        "Recomendación: no hay links EPA en la vista; validar carga WFM/EPA del periodo."
-    )
-
-    titulo_recomendacion = "Recomendación usuario"
-    cuerpo_recomendacion = (
-        f"Promedio recomendación {recomendacion:.1f}/5. "
-        "Acción: cruzar técnicos con menor q5 y comentarios abiertos para coaching puntual."
-        if respondidas else
-        "Recomendación: sin respuestas suficientes, no concluir performance; enfocar captura."
-    )
+    estado_sat, tono_sat, brecha_sat = estado_segun_meta(satisfaccion, 90, tolerancia=5)
+    estado_resp, tono_resp, brecha_resp = estado_segun_meta(tasa_respuesta, 70, tolerancia=10)
+    estado_q5, tono_q5, brecha_q5 = estado_segun_meta(recomendacion, 4, tolerancia=0.3)
 
     return [
-        {"indicador": "Satisfacción EPA", "titulo": titulo_satisfaccion, "cuerpo": cuerpo_satisfaccion, "tono": "bien" if satisfaccion >= 90 else "mal"},
-        {"indicador": "Respuestas", "titulo": titulo_respuesta, "cuerpo": cuerpo_respuesta, "tono": "bien" if tasa_respuesta >= 70 else "accion"},
-        {"indicador": "Recomendación", "titulo": titulo_recomendacion, "cuerpo": cuerpo_recomendacion, "tono": "bien" if recomendacion >= 4 else "accion"},
+        recomendacion_clara(
+            "Satisfacción", estado_sat,
+            f"{satisfaccion:.1f}% de usuarios satisfechos",
+            f"Respondieron {respondidas} usuarios; el promedio general es {promedio:.1f}/5 y la brecha frente a la meta de 90% es {brecha_sat:+.1f} pp.",
+            "Leer respuestas con promedio bajo 4, agrupar comentarios por causa y reforzar la zona con menor resultado." if tono_sat != "bien" else "Mantener el estándar y revisar los comentarios negativos aunque el KPI esté en meta.",
+            tono_sat,
+        ),
+        recomendacion_clara(
+            "Cobertura de respuesta", estado_resp,
+            f"Respondió {tasa_respuesta:.1f}% de los usuarios invitados",
+            f"Hay {respondidas} respuestas de {total_atenciones} invitaciones y {pendientes} pendientes. Referencia de cobertura: 70%.",
+            f"Recuperar los {pendientes} pendientes con contacto post atención el mismo día y seguimiento semanal por zona." if pendientes else "Conservar el proceso de contacto y vigilar que la cobertura no baje al cambiar de semana.",
+            tono_resp,
+        ),
+        recomendacion_clara(
+            "Pregunta de recomendación", estado_q5,
+            f"Q5 promedia {recomendacion:.1f}/5",
+            "Q5 muestra qué tan dispuesto está el usuario a recomendar el servicio; la referencia es 4,0 o más.",
+            "Cruzar Q5 bajo 4 con comentarios y zona para aplicar coaching puntual." if tono_q5 != "bien" else "Usar los comentarios positivos como práctica replicable y revisar cualquier Q5 bajo 4.",
+            tono_q5,
+        ),
     ]
 
 
@@ -5145,23 +5470,48 @@ def construir_insights_uso_herramienta_fallback(metricas):
     detalle_incompleto = int(metricas.get("uso_detalle_incompleto", 0))
     comparativo = str(metricas.get("comparativo_uso_herramienta_proveedor", "")).strip()
 
-    if total_uso:
-        titulo_nota = "Recomendación nota OT"
-        cuerpo_nota = f"Nota promedio {promedio:.1f}/7 en {total_uso} OT; {pct_ok:.1f}% excelente/bueno. Acción: revisar bajo {USO_HERRAMIENTA_META_NOTA} y reforzar llenado completo por región/técnico."
+    if not total_uso:
+        return [recomendacion_clara(
+            "Base de OT", "Sin auditoría", "No hay OT auditadas en la selección",
+            "Los filtros activos no contienen PDF de órdenes de trabajo procesados.",
+            "Ampliar mes, semana o zona. Si esperabas OT nuevas, ejecutar la actualización PST OT.",
+            "accion",
+        )]
+
+    estado_nota, tono_nota, brecha_nota = estado_segun_meta(
+        promedio, USO_HERRAMIENTA_META_NOTA,
+        tolerancia=max(USO_HERRAMIENTA_META_NOTA - USO_HERRAMIENTA_NOTA_BUENA, 0.2),
+    )
+    total_hallazgos = criticas + retiros + detalle_incompleto
+    if criticas:
+        estado_hallazgo, tono_hallazgo = "Prioridad alta", "mal"
+    elif retiros or detalle_incompleto:
+        estado_hallazgo, tono_hallazgo = "Corrección documental", "accion"
     else:
-        titulo_nota = "Sin auditoria OT"
-        cuerpo_nota = "Recomendación: actualizar PST OT o ajustar filtros si esperabas PDF auditados."
-
-    titulo_riesgo = "Recomendación hallazgos"
-    cuerpo_riesgo = f"{criticas} OT críticas, {retiros} retiros incompletos y {detalle_incompleto} detalles incompletos. Acción: exigir equipo intervenido, serie, nombre de máquina ACHS y activo fijo cuando aplique."
-
-    titulo_comparativo = "Recomendación contratistas"
-    cuerpo_comparativo = f"Acción: tomar el peor ST del comparativo y revisar sus OT críticas antes del comité. {comparativo}" if comparativo else "Recomendación: actualizar OT para comparar IBM, SAO y ECC con la misma regla documental."
+        estado_hallazgo, tono_hallazgo = "Sin hallazgos críticos", "bien"
 
     return [
-        {"indicador": "Nota", "titulo": titulo_nota, "cuerpo": cuerpo_nota, "tono": "mal" if total_uso and promedio < USO_HERRAMIENTA_NOTA_BUENA else "accion" if total_uso and promedio < USO_HERRAMIENTA_META_NOTA else "bien"},
-        {"indicador": "Hallazgos", "titulo": titulo_riesgo, "cuerpo": cuerpo_riesgo, "tono": "mal" if criticas or retiros or detalle_incompleto else "bien"},
-        {"indicador": "Contratistas", "titulo": titulo_comparativo, "cuerpo": cuerpo_comparativo, "tono": "accion" if comparativo else "bien"},
+        recomendacion_clara(
+            "Nota documental", estado_nota,
+            f"Nota {promedio:.1f}/7: {abs(brecha_nota):.1f} puntos {'sobre' if brecha_nota >= 0 else 'bajo'} la meta",
+            f"Se auditaron {total_uso} OT y {pct_ok:.1f}% quedó en nivel Excelente o Bueno. La meta documental es {USO_HERRAMIENTA_META_NOTA:.1f}.",
+            "Abrir la zona con menor nota, revisar primero sus OT bajo meta y después bajar a los técnicos responsables." if tono_nota != "bien" else "Mantener una muestra semanal por zona y replicar las OT mejor documentadas.",
+            tono_nota,
+        ),
+        recomendacion_clara(
+            "Hallazgos", estado_hallazgo,
+            f"{total_hallazgos} alertas documentales requieren revisión" if total_hallazgos else "La selección no muestra fallas críticas",
+            f"Hay {criticas} OT críticas, {retiros} retiros incompletos y {detalle_incompleto} registros con detalle insuficiente.",
+            "Exigir equipo intervenido, serie, nombre de máquina, descripción del trabajo, firmas y activo fijo cuando corresponda." if total_hallazgos else "Mantener el estándar y auditar una muestra de OT por semana.",
+            tono_hallazgo,
+        ),
+        recomendacion_clara(
+            "Foco de mejora", "Comparación entre ST" if comparativo else "Priorizar por zona",
+            "Comenzar por el resultado más bajo",
+            "La comparación usa la misma pauta documental para todas las OT filtradas." if comparativo else "La vista actual debe analizarse primero por región para evitar una lista masiva de técnicos.",
+            "Tomar el ST con menor nota y revisar sus regiones críticas antes del comité." if comparativo else "Abrir el ranking regional, seleccionar la zona con menor nota y después revisar sus técnicos y OT críticas.",
+            "accion" if tono_nota != "bien" or comparativo else "bien",
+        ),
     ]
 
 
